@@ -30,14 +30,22 @@ export default function App() {
           final_qty: toNum(r["final_quantity"] ?? r["Final Qty"]),
         });
         const cleaned = res.data.map(map).filter(r => r.symbol);
+        console.log(`Loaded ${cleaned.length} rows from CSV`);
         setRows(cleaned);
+        setSignals([]); // Clear previous signals when new data is loaded
       }
     });
   };
 
   const runStrategy = () => {
+    if (!rows.length) {
+      alert("Please upload a CSV file first!");
+      return;
+    }
+    console.log(`Running strategy on ${rows.length} rows...`);
     const fn = STRATEGIES[strategy];
     const out = fn(rows);
+    console.log(`Generated ${out.length} signals`);
     setSignals(out);
   };
 
@@ -85,7 +93,8 @@ export default function App() {
           </select>
           <button
             onClick={runStrategy}
-            className="bg-sky-500 hover:bg-sky-600 px-4 py-2 rounded"
+            className="bg-sky-500 hover:bg-sky-600 px-4 py-2 rounded disabled:opacity-50"
+            disabled={!rows.length}
           >
             Run
           </button>
