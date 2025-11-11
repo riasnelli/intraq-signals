@@ -7,6 +7,10 @@ export type TSignal = {
   strategy: string;
   side: "LONG"|"SHORT";
   score: number;
+  entry: number;
+  target: number;
+  stopLoss: number;
+  riskReward?: string;
   details?: Record<string, any>;
 };
 
