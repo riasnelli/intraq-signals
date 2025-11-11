@@ -13,7 +13,7 @@ export default function App() {
   const [signals, setSignals] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<"generate"|"history">("generate");
   const [savedSignals, setSavedSignals] = useState<any[]>([]);
-  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
@@ -34,7 +34,12 @@ export default function App() {
       acc[key].signals.push(signal);
       return acc;
     }, {});
-    setSavedSignals(Object.values(grouped));
+    const batches = Object.values(grouped);
+    setSavedSignals(batches);
+    // Set first tab as active by default
+    if (batches.length > 0 && !activeTab) {
+      setActiveTab((batches[0] as any).id);
+    }
   };
 
   const deleteBatch = async (batchId: string) => {
@@ -48,6 +53,12 @@ export default function App() {
     
     const ids = toDelete.map(s => s.id).filter(Boolean) as string[];
     await db.signals.bulkDelete(ids);
+    
+    // If deleting active tab, switch to another
+    if (activeTab === batchId) {
+      const remaining = savedSignals.filter(b => b.id !== batchId);
+      setActiveTab(remaining.length > 0 ? remaining[0].id : null);
+    }
     
     loadHistory(); // Refresh
     alert(`✅ Deleted ${ids.length} signals from ${date}`);
@@ -303,48 +314,60 @@ export default function App() {
                 <p className="text-sm mt-2">Generate signals and click "Save Signals" to build your history.</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {savedSignals.map((batch: any) => (
-                  <div key={batch.id} className="bg-slate-900 rounded overflow-hidden">
-                    {/* Batch Header Row */}
-                    <div className="flex items-center justify-between p-4 hover:bg-slate-800 cursor-pointer"
-                         onClick={() => setExpandedBatch(expandedBatch === batch.id ? null : batch.id)}>
-                      <div className="flex items-center gap-4 flex-1">
-                        <button className="text-slate-400 hover:text-slate-200">
-                          {expandedBatch === batch.id ? '▼' : '▶'}
-                        </button>
+              <div className="space-y-4">
+                {/* Tab Navigation */}
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {savedSignals.map((batch: any) => (
+                    <button
+                      key={batch.id}
+                      onClick={() => setActiveTab(batch.id)}
+                      className={`flex-shrink-0 px-4 py-2 rounded text-sm font-medium transition-colors ${
+                        activeTab === batch.id
+                          ? 'bg-sky-600 text-white'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      <div className="font-semibold">{batch.date}</div>
+                      <div className="text-xs opacity-80">{batch.signals.length} signals</div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Active Tab Content */}
+                {activeTab && (() => {
+                  const activeBatch = savedSignals.find(b => b.id === activeTab);
+                  if (!activeBatch) return null;
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Tab Header with Actions */}
+                      <div className="bg-slate-900 rounded p-4 flex items-center justify-between">
                         <div>
-                          <div className="font-semibold text-slate-200">
-                            {batch.date}
-                          </div>
-                          <div className="text-xs text-slate-400">
-                            {batch.strategy} • {batch.signals.length} signals
-                          </div>
+                          <h3 className="font-semibold text-slate-200">{activeBatch.date}</h3>
+                          <p className="text-sm text-slate-400">{activeBatch.strategy} • {activeBatch.signals.length} signals</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => downloadCSV(activeBatch)}
+                            className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded text-sm flex items-center gap-2"
+                          >
+                            📥 Download CSV
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`Delete ${activeBatch.signals.length} signals from ${activeBatch.date}?`)) {
+                                deleteBatch(activeBatch.id);
+                              }
+                            }}
+                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm flex items-center gap-2"
+                          >
+                            🗑️ Delete
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => downloadCSV(batch)}
-                          className="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
-                        >
-                          📥 CSV
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete ${batch.signals.length} signals from ${batch.date}?`)) {
-                              deleteBatch(batch.id);
-                            }
-                          }}
-                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
-                        >
-                          🗑️ Delete
-                        </button>
-                      </div>
-                    </div>
 
-                    {/* Expanded Signals Table */}
-                    {expandedBatch === batch.id && (
-                      <div className="border-t border-slate-800 p-4">
+                      {/* Signals Table */}
+                      <div className="bg-slate-900 rounded p-3 overflow-auto">
                         <table className="w-full text-sm">
                           <thead className="text-slate-300">
                             <tr>
@@ -359,7 +382,7 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {batch.signals.map((s: any, i: number) => (
+                            {activeBatch.signals.map((s: any, i: number) => (
                               <tr key={s.id} className="border-t border-slate-800 hover:bg-slate-800">
                                 <td className="p-2 text-slate-400">{i+1}</td>
                                 <td className="p-2 font-semibold text-sky-300">{s.symbol}</td>
@@ -378,9 +401,9 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
