@@ -20,15 +20,16 @@ export default function App() {
 
   const loadHistory = async () => {
     const all = await db.signals.orderBy("date").reverse().toArray();
-    // Group by date + strategy
+    // Group by date + strategy + CSV filename (so each upload is separate)
     const grouped = all.reduce((acc: any, signal: any) => {
-      const key = `${signal.date}_${signal.strategy}`;
+      const csvFile = signal.details?.csvFileName || "Unknown.csv";
+      const key = `${signal.date}_${signal.strategy}_${csvFile}`;
       if (!acc[key]) {
         acc[key] = {
           id: key,
           date: signal.date,
           strategy: signal.strategy,
-          csvFileName: signal.details?.csvFileName || "Unknown.csv",
+          csvFileName: csvFile,
           signals: [],
           isExpanded: false,
         };
@@ -55,19 +56,21 @@ export default function App() {
   };
 
   const deleteBatch = async (batchId: string) => {
-    const [date, ...strategyParts] = batchId.split('_');
-    const strategy = strategyParts.join('_');
+    // Split by underscore: date_strategy_csvfilename
+    const parts = batchId.split('_');
+    const date = parts[0];
+    const csvFileName = parts[parts.length - 1]; // Last part is CSV filename
     
     const toDelete = await db.signals
       .where('date').equals(date)
-      .and(s => s.strategy === strategy)
+      .and(s => s.details?.csvFileName === csvFileName)
       .toArray();
     
     const ids = toDelete.map(s => s.id).filter(Boolean) as string[];
     await db.signals.bulkDelete(ids);
     
     loadHistory(); // Refresh
-    alert(`✅ Deleted ${ids.length} signals from ${date}`);
+    alert(`✅ Deleted ${ids.length} signals from ${csvFileName}`);
   };
 
   const downloadCSV = (batch: any) => {
