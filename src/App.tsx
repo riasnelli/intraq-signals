@@ -13,13 +13,71 @@ export default function App() {
   const [signals, setSignals] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<"generate"|"history">("generate");
   const [savedSignals, setSavedSignals] = useState<any[]>([]);
+  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
 
   const loadHistory = async () => {
     const all = await db.signals.orderBy("date").reverse().toArray();
-    setSavedSignals(all);
+    // Group by date + strategy
+    const grouped = all.reduce((acc: any, signal: any) => {
+      const key = `${signal.date}_${signal.strategy}`;
+      if (!acc[key]) {
+        acc[key] = {
+          id: key,
+          date: signal.date,
+          strategy: signal.strategy,
+          signals: [],
+        };
+      }
+      acc[key].signals.push(signal);
+      return acc;
+    }, {});
+    setSavedSignals(Object.values(grouped));
+  };
+
+  const deleteBatch = async (batchId: string) => {
+    const [date, ...strategyParts] = batchId.split('_');
+    const strategy = strategyParts.join('_');
+    
+    const toDelete = await db.signals
+      .where('date').equals(date)
+      .and(s => s.strategy === strategy)
+      .toArray();
+    
+    const ids = toDelete.map(s => s.id).filter(Boolean) as string[];
+    await db.signals.bulkDelete(ids);
+    
+    loadHistory(); // Refresh
+    alert(`✅ Deleted ${ids.length} signals from ${date}`);
+  };
+
+  const downloadCSV = (batch: any) => {
+    const headers = ['Symbol', 'Side', 'Entry', 'Target', 'Stop Loss', 'R:R', 'Score', 'Why'];
+    const rows = batch.signals.map((s: any) => [
+      s.symbol,
+      s.side,
+      s.entry?.toFixed(2) ?? '',
+      s.target?.toFixed(2) ?? '',
+      s.stopLoss?.toFixed(2) ?? '',
+      s.riskReward ?? '',
+      s.score?.toFixed(2) ?? '',
+      s.details?.why ?? ''
+    ]);
+    
+    const csv = [
+      headers.join(','),
+      ...rows.map((r: any[]) => r.map((cell: any) => `"${cell}"`).join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `signals_${batch.date}_${batch.strategy.replace(/\s+/g, '_')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const parseCsv = (file: File) => {
@@ -234,7 +292,9 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">📋 Saved Signals History</h2>
-              <div className="text-sm text-slate-400">{savedSignals.length} total signals saved</div>
+              <div className="text-sm text-slate-400">
+                {savedSignals.length} saved session{savedSignals.length !== 1 ? 's' : ''}
+              </div>
             </div>
 
             {savedSignals.length === 0 ? (
@@ -243,41 +303,84 @@ export default function App() {
                 <p className="text-sm mt-2">Generate signals and click "Save Signals" to build your history.</p>
               </div>
             ) : (
-              <div className="bg-slate-900 rounded p-3 overflow-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-slate-300">
-                    <tr>
-                      <th className="text-left p-2">Date</th>
-                      <th className="text-left p-2">Symbol</th>
-                      <th className="text-left p-2">Strategy</th>
-                      <th className="text-left p-2">Side</th>
-                      <th className="text-right p-2">Entry ₹</th>
-                      <th className="text-right p-2">Target ₹</th>
-                      <th className="text-right p-2">Stop Loss ₹</th>
-                      <th className="text-center p-2">R:R</th>
-                      <th className="text-right p-2">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {savedSignals.map((s: any) => (
-                      <tr key={s.id} className="border-t border-slate-800 hover:bg-slate-800">
-                        <td className="p-2 text-slate-400 text-xs">{s.date}</td>
-                        <td className="p-2 font-semibold text-sky-300">{s.symbol}</td>
-                        <td className="p-2 text-xs text-slate-400">{s.strategy.split('(')[0].trim()}</td>
-                        <td className="p-2">
-                          <span className={`px-2 py-1 rounded text-xs ${s.side === 'LONG' ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
-                            {s.side}
-                          </span>
-                        </td>
-                        <td className="p-2 text-right font-mono">{s.entry?.toFixed(2) ?? '-'}</td>
-                        <td className="p-2 text-right font-mono text-emerald-400">{s.target?.toFixed(2) ?? '-'}</td>
-                        <td className="p-2 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
-                        <td className="p-2 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
-                        <td className="p-2 text-right text-slate-400">{s.score?.toFixed(2) ?? '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-3">
+                {savedSignals.map((batch: any) => (
+                  <div key={batch.id} className="bg-slate-900 rounded overflow-hidden">
+                    {/* Batch Header Row */}
+                    <div className="flex items-center justify-between p-4 hover:bg-slate-800 cursor-pointer"
+                         onClick={() => setExpandedBatch(expandedBatch === batch.id ? null : batch.id)}>
+                      <div className="flex items-center gap-4 flex-1">
+                        <button className="text-slate-400 hover:text-slate-200">
+                          {expandedBatch === batch.id ? '▼' : '▶'}
+                        </button>
+                        <div>
+                          <div className="font-semibold text-slate-200">
+                            {batch.date}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {batch.strategy} • {batch.signals.length} signals
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => downloadCSV(batch)}
+                          className="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
+                        >
+                          📥 CSV
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete ${batch.signals.length} signals from ${batch.date}?`)) {
+                              deleteBatch(batch.id);
+                            }
+                          }}
+                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
+                        >
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expanded Signals Table */}
+                    {expandedBatch === batch.id && (
+                      <div className="border-t border-slate-800 p-4">
+                        <table className="w-full text-sm">
+                          <thead className="text-slate-300">
+                            <tr>
+                              <th className="text-left p-2">#</th>
+                              <th className="text-left p-2">Symbol</th>
+                              <th className="text-left p-2">Side</th>
+                              <th className="text-right p-2">Entry ₹</th>
+                              <th className="text-right p-2">Target ₹</th>
+                              <th className="text-right p-2">Stop Loss ₹</th>
+                              <th className="text-center p-2">R:R</th>
+                              <th className="text-right p-2">Score</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {batch.signals.map((s: any, i: number) => (
+                              <tr key={s.id} className="border-t border-slate-800 hover:bg-slate-800">
+                                <td className="p-2 text-slate-400">{i+1}</td>
+                                <td className="p-2 font-semibold text-sky-300">{s.symbol}</td>
+                                <td className="p-2">
+                                  <span className={`px-2 py-1 rounded text-xs ${s.side === 'LONG' ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
+                                    {s.side}
+                                  </span>
+                                </td>
+                                <td className="p-2 text-right font-mono">{s.entry?.toFixed(2) ?? '-'}</td>
+                                <td className="p-2 text-right font-mono text-emerald-400">{s.target?.toFixed(2) ?? '-'}</td>
+                                <td className="p-2 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
+                                <td className="p-2 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
+                                <td className="p-2 text-right text-slate-400">{s.score?.toFixed(2) ?? '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
