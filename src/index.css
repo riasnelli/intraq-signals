@@ -3,3 +3,35 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
+
+@layer utilities {
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideInBottom {
+    from {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .animate-slideInRight {
+    animation: slideInRight 0.4s ease-out;
+  }
+
+  .animate-slideInBottom {
+    animation: slideInBottom 0.4s ease-out;
+  }
+}

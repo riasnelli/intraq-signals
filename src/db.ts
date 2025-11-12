@@ -11,7 +11,20 @@ export type TSignal = {
   target: number;
   stopLoss: number;
   riskReward?: string;
+  sector?: string;
   details?: Record<string, any>;
+  backtest?: {
+    entryHit: boolean;
+    entryHitTime?: string;
+    targetHit: boolean;
+    targetHitTime?: string;
+    slHit: boolean;
+    slHitTime?: string;
+    outcome?: "target" | "sl" | "no_trigger";
+    timeToTarget?: number;
+    timeToSL?: number;
+    usedRealData?: boolean;
+  };
 };
 
 export type TBacktest = {

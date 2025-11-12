@@ -4,6 +4,9 @@ import Papa from "papaparse";
 import { db } from "./db";
 import { STRATEGIES, StrategyName, Row } from "./strategies";
 import { toNum } from "./utils";
+import Settings from "./components/Settings";
+import Insights from "./components/Insights";
+import { backtestBatch } from "./backtest";
 
 type Raw = Record<string, string>;
 
@@ -14,6 +17,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState<"generate"|"history">("generate");
   const [savedSignals, setSavedSignals] = useState<any[]>([]);
   const [csvFileName, setCsvFileName] = useState<string>("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [backtestingBatchId, setBacktestingBatchId] = useState<string | null>(null);
+  const [expandedInsightsBatchId, setExpandedInsightsBatchId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
@@ -71,6 +77,44 @@ export default function App() {
     
     loadHistory(); // Refresh
     alert(`✅ Deleted ${ids.length} signals from ${csvFileName}`);
+  };
+
+  const runBacktest = async (batch: any) => {
+    // Check if backtest already exists
+    const hasBacktest = batch.signals.some((s: any) => s.backtest);
+    if (hasBacktest) {
+      const rerun = confirm(
+        `Backtest data already exists for this batch.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
+      );
+      if (!rerun) return;
+    }
+
+    setBacktestingBatchId(batch.id);
+    try {
+      const results = await backtestBatch(batch.signals);
+      await loadHistory(); // Reload to get updated data
+      
+      // Check how many used real data
+      const realDataCount = results.filter(r => r.backtest?.usedRealData).length;
+      const totalCount = results.length;
+      
+      let message = `✅ Backtest completed for ${totalCount} signals!\n\n`;
+      
+      if (realDataCount === totalCount) {
+        message += `✅ Using REAL historical data from Dhan API\nResults are based on actual market data.`;
+      } else if (realDataCount > 0) {
+        message += `📊 Mixed data sources:\n• Real data: ${realDataCount} stocks\n• Mock data: ${totalCount - realDataCount} stocks (API fetch failed)\n\nCheck console for details.`;
+      } else {
+        message += `⚠️ Using MOCK/SIMULATED data\nDhan API may not be configured or data fetch failed.\n\nConfigure Dhan API credentials in Settings for real data.`;
+      }
+      
+      alert(message);
+    } catch (error) {
+      console.error('Backtest error:', error);
+      alert('❌ Backtest failed. Check console for details.');
+    } finally {
+      setBacktestingBatchId(null);
+    }
   };
 
   const downloadCSV = (batch: any) => {
@@ -205,6 +249,16 @@ export default function App() {
               className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded text-sm"
             >
               {viewMode === "generate" ? "📋 View History" : "⬅ Back to Generate"}
+            </button>
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="bg-slate-800 hover:bg-slate-700 p-2 rounded text-slate-300 hover:text-slate-100 transition-colors"
+              title="Settings"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
             </button>
           </div>
         </header>
@@ -347,6 +401,35 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          onClick={() => runBacktest(batch)}
+                          disabled={backtestingBatchId === batch.id}
+                          className={`${
+                            batch.signals.some((s: any) => s.backtest)
+                              ? 'bg-green-600 hover:bg-green-700'
+                              : 'bg-purple-600 hover:bg-purple-700'
+                          } disabled:bg-purple-800 disabled:opacity-50 text-white px-3 py-1 rounded text-sm`}
+                        >
+                          {backtestingBatchId === batch.id 
+                            ? '⏳ Running...' 
+                            : batch.signals.some((s: any) => s.backtest)
+                            ? '✅ Backtested'
+                            : '🎯 Backtest'}
+                        </button>
+                        {batch.signals.some((s: any) => s.backtest) && (
+                          <button
+                            onClick={() => setExpandedInsightsBatchId(
+                              expandedInsightsBatchId === batch.id ? null : batch.id
+                            )}
+                            className={`${
+                              expandedInsightsBatchId === batch.id
+                                ? 'bg-indigo-700'
+                                : 'bg-indigo-600 hover:bg-indigo-700'
+                            } text-white px-3 py-1 rounded text-sm transition-colors`}
+                          >
+                            {expandedInsightsBatchId === batch.id ? '📊 Hide Insights' : '📊 Insights'}
+                          </button>
+                        )}
+                        <button
                           onClick={() => downloadCSV(batch)}
                           className="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded text-sm"
                         >
@@ -365,9 +448,103 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* Insights Panel - Slide in from right */}
+                    {batch.isExpanded && expandedInsightsBatchId === batch.id && batch.signals.some((s: any) => s.backtest) && (
+                      <div className="border-t border-slate-800 overflow-hidden">
+                        <div className="animate-slideInRight">
+                          <Insights 
+                            batchId={batch.id} 
+                            date={batch.date}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {/* Expanded Signals Table */}
                     {batch.isExpanded && (
-                      <div className="border-t border-slate-800 p-4">
+                      <div className="border-t border-slate-800 p-4 space-y-4">
+                        {/* Statistics - Show if backtest data exists */}
+                        {batch.signals.some((s: any) => s.backtest) && (
+                          <>
+                            {/* Data Source Indicator */}
+                            {(() => {
+                              const hasRealData = batch.signals.some((s: any) => s.backtest?.usedRealData);
+                              const realDataCount = batch.signals.filter((s: any) => s.backtest?.usedRealData).length;
+                              const totalBacktested = batch.signals.filter((s: any) => s.backtest).length;
+                              
+                              if (hasRealData && realDataCount === totalBacktested) {
+                                // All real data
+                                return (
+                                  <div className="bg-green-900/20 border border-green-700/50 rounded p-3 flex items-start gap-3">
+                                    <svg className="w-5 h-5 text-green-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <div className="flex-1">
+                                      <div className="text-green-300 text-sm font-medium mb-1">✅ Using Real Historical Data</div>
+                                      <div className="text-green-200/70 text-xs">
+                                        Results based on actual market data from Dhan API ({realDataCount}/{totalBacktested} stocks)
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              } else if (hasRealData) {
+                                // Mixed data
+                                return (
+                                  <div className="bg-blue-900/20 border border-blue-700/50 rounded p-3 flex items-start gap-3">
+                                    <svg className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <div className="flex-1">
+                                      <div className="text-blue-300 text-sm font-medium mb-1">📊 Mixed Data Sources</div>
+                                      <div className="text-blue-200/70 text-xs">
+                                        Real data: {realDataCount} stocks | Mock data: {totalBacktested - realDataCount} stocks (API fetch failed)
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              } else {
+                                // All mock data
+                                return (
+                                  <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 flex items-start gap-3">
+                                    <svg className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <div className="flex-1">
+                                      <div className="text-yellow-300 text-sm font-medium mb-1">⚠️ Using Simulated Data</div>
+                                      <div className="text-yellow-200/70 text-xs">
+                                        Results based on mock data. Configure Dhan API in Settings for real historical market data.
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            })()}
+                            <div className="bg-slate-800 rounded p-4 flex gap-6">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400 text-sm">Entry Hit:</span>
+                                <span className="text-lg font-semibold text-emerald-400">
+                                  {batch.signals.filter((s: any) => s.backtest?.entryHit).length} / {batch.signals.length}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400 text-sm">Target Hit:</span>
+                                <span className="text-lg font-semibold text-green-400">
+                                  {batch.signals.filter((s: any) => s.backtest?.targetHit).length} / {batch.signals.length}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400 text-sm">Win Rate:</span>
+                                <span className="text-lg font-semibold text-yellow-400">
+                                  {batch.signals.filter((s: any) => s.backtest?.entryHit).length > 0
+                                    ? ((batch.signals.filter((s: any) => s.backtest?.targetHit).length / 
+                                        batch.signals.filter((s: any) => s.backtest?.entryHit).length) * 100).toFixed(1)
+                                    : '0'}%
+                                </span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
                         <table className="w-full text-sm">
                           <thead className="text-slate-300">
                             <tr>
@@ -379,6 +556,13 @@ export default function App() {
                               <th className="text-right p-2">Stop Loss ₹</th>
                               <th className="text-center p-2">R:R</th>
                               <th className="text-right p-2">Score</th>
+                              {batch.signals.some((s: any) => s.backtest) && (
+                                <>
+                                  <th className="text-center p-2">Hit</th>
+                                  <th className="text-center p-2">Target</th>
+                                  <th className="text-center p-2">SL</th>
+                                </>
+                              )}
                             </tr>
                           </thead>
                           <tbody>
@@ -396,6 +580,25 @@ export default function App() {
                                 <td className="p-2 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
                                 <td className="p-2 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
                                 <td className="p-2 text-right text-slate-400">{s.score?.toFixed(2) ?? '-'}</td>
+                                {batch.signals.some((sig: any) => sig.backtest) && (
+                                  <>
+                                    <td className={`p-2 text-center text-xs font-medium ${
+                                      s.backtest?.entryHit ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-400'
+                                    }`}>
+                                      {s.backtest?.entryHit ? s.backtest.entryHitTime : '✗'}
+                                    </td>
+                                    <td className={`p-2 text-center text-xs font-medium ${
+                                      s.backtest?.targetHit ? 'bg-green-900/30 text-green-300' : 'text-slate-500'
+                                    }`}>
+                                      {s.backtest?.targetHit ? s.backtest.targetHitTime : '-'}
+                                    </td>
+                                    <td className={`p-2 text-center text-xs font-medium ${
+                                      s.backtest?.slHit ? 'bg-red-900/30 text-red-400' : 'text-slate-500'
+                                    }`}>
+                                      {s.backtest?.slHit ? s.backtest.slHitTime : '-'}
+                                    </td>
+                                  </>
+                                )}
                               </tr>
                             ))}
                           </tbody>
@@ -413,6 +616,9 @@ export default function App() {
           Tip: Deploy to Netlify → Open in Safari → Share → Add to Home Screen (iOS PWA).
         </p>
       </div>
+
+      {/* Settings Modal */}
+      <Settings isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
     </div>
   );
 }
