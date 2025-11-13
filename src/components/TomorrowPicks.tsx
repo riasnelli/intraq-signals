@@ -1,8 +1,9 @@
 // TomorrowPicks.tsx
-// Analyzes today's backtest results to suggest tomorrow's trading strategy
+// AI-powered Tomorrow's Picks using Momentum Quality Score engine
 
-import React, { useMemo } from 'react';
+import React from 'react';
 import { TSignal } from '../db';
+import { useTomorrowsPicks } from '../logic/useTomorrowsPicks';
 
 interface TomorrowPicksProps {
   signals: TSignal[];
@@ -10,437 +11,299 @@ interface TomorrowPicksProps {
 }
 
 export default function TomorrowPicks({ signals, onClose }: TomorrowPicksProps) {
-  // Analyze backtest results
-  const analysis = useMemo(() => {
-    const backtested = signals.filter(s => s.backtest && !s.backtest.noData);
-    
-    if (backtested.length === 0) {
-      return null;
-    }
-    
-    // 1. AI Ranking Performance
-    const aiRankedStocks = backtested.filter(s => s.finalRank);
-    const aiWins = aiRankedStocks.filter(s => s.backtest?.outcome === 'target');
-    const aiWinRate = aiRankedStocks.length > 0 
-      ? (aiWins.length / aiRankedStocks.length * 100).toFixed(1)
-      : '0';
-    
-    const top5Stocks = aiRankedStocks.filter(s => s.finalRank && s.finalRank <= 5);
-    const top5Wins = top5Stocks.filter(s => s.backtest?.outcome === 'target');
-    const top5WinRate = top5Stocks.length > 0
-      ? (top5Wins.length / top5Stocks.length * 100).toFixed(1)
-      : '0';
-    
-    // 2. Technical Indicator Correlations
-    const winners = backtested.filter(s => s.backtest?.outcome === 'target');
-    const losers = backtested.filter(s => s.backtest?.outcome === 'sl');
-    
-    // Average indicators for winners vs losers
-    const avgGapWinners = winners.reduce((sum, s) => sum + (s.gapPercent || 0), 0) / (winners.length || 1);
-    const avgGapLosers = losers.reduce((sum, s) => sum + (s.gapPercent || 0), 0) / (losers.length || 1);
-    
-    const avgRSWinners = winners.reduce((sum, s) => sum + (s.relativeStrength20D || 0), 0) / (winners.length || 1);
-    const avgRSLosers = losers.reduce((sum, s) => sum + (s.relativeStrength20D || 0), 0) / (losers.length || 1);
-    
-    const avgVolSurgeWinners = winners.reduce((sum, s) => sum + (s.preMarketVolumeSurge || 0), 0) / (winners.length || 1);
-    const avgVolSurgeLosers = losers.reduce((sum, s) => sum + (s.preMarketVolumeSurge || 0), 0) / (losers.length || 1);
-    
-    // 3. Trend Performance
-    const strongUptrend = backtested.filter(s => s.trendStatus === 'Strong Uptrend');
-    const strongUptrendWins = strongUptrend.filter(s => s.backtest?.outcome === 'target');
-    const strongUptrendWinRate = strongUptrend.length > 0
-      ? (strongUptrendWins.length / strongUptrend.length * 100).toFixed(1)
-      : '0';
-    
-    // 4. Best performers
-    const bestPerformers = winners
-      .sort((a, b) => {
-        const timeA = a.backtest?.timeToTarget || 999;
-        const timeB = b.backtest?.timeToTarget || 999;
-        return timeA - timeB; // Fastest first
-      })
-      .slice(0, 3);
-    
-    // 5. Worst performers (for learning)
-    const worstPerformers = losers.slice(0, 3);
-    
-    // 6. Overall stats
-    const entryHits = backtested.filter(s => s.backtest?.entryHit).length;
-    const targetHits = winners.length;
-    const overallWinRate = entryHits > 0 
-      ? (targetHits / entryHits * 100).toFixed(1)
-      : '0';
-    
-    return {
-      aiWinRate,
-      top5WinRate,
-      avgGapWinners,
-      avgGapLosers,
-      avgRSWinners,
-      avgRSLosers,
-      avgVolSurgeWinners,
-      avgVolSurgeLosers,
-      strongUptrendWinRate,
-      bestPerformers,
-      worstPerformers,
-      overallWinRate,
-      totalBacktested: backtested.length,
-      totalWins: winners.length,
-      totalLosses: losers.length,
-    };
-  }, [signals]);
+  const { topPicks, avoidList, regime, filtersUsed } = useTomorrowsPicks(signals);
 
-  if (!analysis) {
-    return (
-      <div className="bg-slate-800/50 p-8 text-center">
-        <p className="text-slate-400">No backtest data available. Run backtest first.</p>
-      </div>
-    );
-  }
+  // Calculate basic backtest metrics
+  const backtested = signals.filter(s => s.backtest && !s.backtest.noData);
+  const entryHits = backtested.filter(s => s.backtest?.entryHit).length;
+  const targetHits = backtested.filter(s => s.backtest?.targetHit).length;
+  const slHits = backtested.filter(s => s.backtest?.slHit).length;
+  const winRate = entryHits > 0 ? ((targetHits / entryHits) * 100).toFixed(1) : '0.0';
 
   return (
-    <div className="bg-gradient-to-b from-slate-800/80 to-slate-900/80 p-6 space-y-6 border-b border-slate-700">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600/20 p-2 rounded-lg">
-            <svg className="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-            </svg>
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-slate-100">📊 Tomorrow's Picks - AI Strategy Insights</h2>
-            <p className="text-sm text-slate-400">Based on today's backtest results & performance analysis</p>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="text-slate-400 hover:text-slate-200 transition-colors"
-          title="Close insights"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Key Metrics */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700">
-          <div className="text-3xl font-bold text-emerald-400">{analysis.overallWinRate}%</div>
-          <div className="text-xs text-slate-400 mt-1">Overall Win Rate</div>
-          <div className="text-xs text-slate-500 mt-2">{analysis.totalWins}W / {analysis.totalLosses}L</div>
-        </div>
-        <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700">
-          <div className="text-3xl font-bold text-yellow-400">{analysis.top5WinRate}%</div>
-          <div className="text-xs text-slate-400 mt-1">AI Top 5 Win Rate</div>
-          <div className="text-xs text-slate-500 mt-2">⭐ Consensus picks</div>
-        </div>
-        <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700">
-          <div className="text-3xl font-bold text-cyan-400">{analysis.strongUptrendWinRate}%</div>
-          <div className="text-xs text-slate-400 mt-1">Strong Uptrend Win Rate</div>
-          <div className="text-xs text-slate-500 mt-2">📈 EMA alignment</div>
-        </div>
-        <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700">
-          <div className="text-3xl font-bold text-indigo-400">{analysis.totalBacktested}</div>
-          <div className="text-xs text-slate-400 mt-1">Stocks Tested</div>
-          <div className="text-xs text-slate-500 mt-2">Today's sample</div>
-        </div>
-      </div>
-
-      {/* Tomorrow's Strategy Recommendations */}
-      <div className="grid grid-cols-2 gap-6">
-        {/* Left: What Worked */}
-        <div className="bg-slate-900/40 rounded-lg p-5 border border-emerald-900/30">
-          <h3 className="text-lg font-semibold text-emerald-400 mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            ✅ What Worked Today
-          </h3>
-          <div className="space-y-3 text-sm">
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Average Gap % (Winners)</span>
-              <span className="font-bold text-emerald-400">+{analysis.avgGapWinners.toFixed(2)}%</span>
+    <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-screen px-4 py-8">
+        <div className="max-w-6xl mx-auto">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-100 flex items-center gap-3">
+                <span className="text-4xl">🎯</span>
+                Tomorrow's Picks & Insights
+              </h1>
+              <p className="text-slate-400 mt-1">
+                AI-powered recommendations using Momentum Quality Score
+              </p>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Avg RS 20D (Winners)</span>
-              <span className="font-bold text-emerald-400">+{analysis.avgRSWinners.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Avg Vol Surge (Winners)</span>
-              <span className="font-bold text-emerald-400">{analysis.avgVolSurgeWinners.toFixed(0)}%</span>
-            </div>
-            <div className="bg-emerald-900/20 rounded p-3 mt-4">
-              <div className="text-xs text-emerald-300 font-medium mb-2">🏆 Best Performers (Fastest to Target):</div>
-              {analysis.bestPerformers.map((s, idx) => (
-                <div key={s.id} className="text-xs text-slate-300 py-1">
-                  {idx + 1}. <span className="font-semibold text-emerald-400">{s.symbol}</span> - 
-                  Target in {s.backtest?.timeToTarget || 0} min
-                  {s.finalRank && <span className="text-yellow-400"> (AI Rank #{s.finalRank})</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Right: What Failed */}
-        <div className="bg-slate-900/40 rounded-lg p-5 border border-red-900/30">
-          <h3 className="text-lg font-semibold text-red-400 mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            ❌ What Failed Today
-          </h3>
-          <div className="space-y-3 text-sm">
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Average Gap % (Losers)</span>
-              <span className="font-bold text-red-400">{analysis.avgGapLosers >= 0 ? '+' : ''}{analysis.avgGapLosers.toFixed(2)}%</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Avg RS 20D (Losers)</span>
-              <span className="font-bold text-red-400">+{analysis.avgRSLosers.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">Avg Vol Surge (Losers)</span>
-              <span className="font-bold text-red-400">{analysis.avgVolSurgeLosers.toFixed(0)}%</span>
-            </div>
-            {analysis.worstPerformers.length > 0 && (
-              <div className="bg-red-900/20 rounded p-3 mt-4">
-                <div className="text-xs text-red-300 font-medium mb-2">⚠️ Stocks That Hit SL:</div>
-                {analysis.worstPerformers.map((s, idx) => (
-                  <div key={s.id} className="text-xs text-slate-300 py-1">
-                    {idx + 1}. <span className="font-semibold text-red-400">{s.symbol}</span> - 
-                    SL in {s.backtest?.timeToSL || 0} min
-                    {s.finalRank && <span className="text-yellow-400"> (AI Rank #{s.finalRank})</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Tomorrow's Action Plan */}
-      <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 rounded-lg p-6 border border-indigo-700/50">
-        <h3 className="text-lg font-bold text-indigo-300 mb-4 flex items-center gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          🎯 Tomorrow's Strategy (Based on Today's Results)
-        </h3>
-        
-        <div className="grid grid-cols-2 gap-4">
-          {/* Key Learnings */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2">📚 Key Learnings:</h4>
-            
-            {parseFloat(analysis.top5WinRate) > parseFloat(analysis.overallWinRate) ? (
-              <div className="flex items-start gap-2 text-sm">
-                <span className="text-emerald-400 mt-0.5">✓</span>
-                <span className="text-slate-300">
-                  <strong className="text-emerald-400">AI consensus works!</strong> Top 5 outperformed 
-                  ({analysis.top5WinRate}% vs {analysis.overallWinRate}% overall)
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-start gap-2 text-sm">
-                <span className="text-yellow-400 mt-0.5">⚠</span>
-                <span className="text-slate-300">
-                  AI picks didn't outperform today. Trust your score metric.
-                </span>
-              </div>
-            )}
-            
-            {analysis.avgGapWinners > analysis.avgGapLosers + 0.5 && (
-              <div className="flex items-start gap-2 text-sm">
-                <span className="text-emerald-400 mt-0.5">✓</span>
-                <span className="text-slate-300">
-                  <strong className="text-cyan-400">Larger gaps win:</strong> Winners averaged 
-                  +{analysis.avgGapWinners.toFixed(2)}% gap vs +{analysis.avgGapLosers.toFixed(2)}% for losers
-                </span>
-              </div>
-            )}
-            
-            {analysis.avgRSWinners > analysis.avgRSLosers + 1 && (
-              <div className="flex items-start gap-2 text-sm">
-                <span className="text-emerald-400 mt-0.5">✓</span>
-                <span className="text-slate-300">
-                  <strong className="text-cyan-400">Relative strength matters:</strong> Winners had 
-                  +{analysis.avgRSWinners.toFixed(1)} RS vs +{analysis.avgRSLosers.toFixed(1)} for losers
-                </span>
-              </div>
-            )}
-            
-            {parseFloat(analysis.strongUptrendWinRate) > 60 && (
-              <div className="flex items-start gap-2 text-sm">
-                <span className="text-emerald-400 mt-0.5">✓</span>
-                <span className="text-slate-300">
-                  <strong className="text-cyan-400">Trend matters:</strong> Strong Uptrend stocks had 
-                  {analysis.strongUptrendWinRate}% win rate
-                </span>
-              </div>
-            )}
+            <button
+              onClick={onClose}
+              className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-slate-300 hover:text-slate-100 transition-colors flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Close
+            </button>
           </div>
 
-          {/* Tomorrow's Filters */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2">🎯 Tomorrow's Filters:</h4>
-            
-            <div className="bg-slate-900/60 rounded p-3 space-y-2 text-sm">
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="6"/>
-                </svg>
-                <span className="text-slate-200">
-                  Gap% <strong className="text-emerald-400">&gt; {Math.max(1, analysis.avgGapWinners - 0.5).toFixed(1)}%</strong>
-                </span>
+          {/* Key Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gradient-to-br from-blue-900/40 to-blue-800/20 border border-blue-700/50 rounded-xl p-4">
+              <div className="text-blue-300 text-sm font-medium">Entry Hit Rate</div>
+              <div className="text-3xl font-bold text-blue-100 mt-1">
+                {entryHits}/{backtested.length}
               </div>
-              
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="6"/>
-                </svg>
-                <span className="text-slate-200">
-                  Relative Strength <strong className="text-emerald-400">&gt; +{Math.max(3, analysis.avgRSWinners - 1).toFixed(1)}</strong>
-                </span>
+              <div className="text-blue-400 text-xs mt-1">
+                {backtested.length > 0 ? ((entryHits / backtested.length) * 100).toFixed(1) : '0'}% triggered
               </div>
-              
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="6"/>
-                </svg>
-                <span className="text-slate-200">
-                  Trend Status: <strong className="text-emerald-400">Strong Uptrend</strong> 📈
-                </span>
+            </div>
+
+            <div className="bg-gradient-to-br from-green-900/40 to-green-800/20 border border-green-700/50 rounded-xl p-4">
+              <div className="text-green-300 text-sm font-medium">Win Rate</div>
+              <div className="text-3xl font-bold text-green-100 mt-1">{winRate}%</div>
+              <div className="text-green-400 text-xs mt-1">
+                {targetHits} targets / {entryHits} entries
               </div>
-              
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="6"/>
-                </svg>
-                <span className="text-slate-200">
-                  Get <strong className="text-yellow-400">AI consensus</strong> from 3 sources ⭐
-                </span>
+            </div>
+
+            <div className="bg-gradient-to-br from-red-900/40 to-red-800/20 border border-red-700/50 rounded-xl p-4">
+              <div className="text-red-300 text-sm font-medium">Stop Losses</div>
+              <div className="text-3xl font-bold text-red-100 mt-1">{slHits}</div>
+              <div className="text-red-400 text-xs mt-1">
+                {entryHits > 0 ? ((slHits / entryHits) * 100).toFixed(1) : '0'}% stopped out
               </div>
-              
-              {parseFloat(analysis.top5WinRate) > parseFloat(analysis.overallWinRate) && (
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-700">
-                  <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
-                  </svg>
-                  <span className="text-slate-200 font-semibold">
-                    <strong className="text-yellow-400">Only trade AI Top 5</strong> (Better win rate!)
-                  </span>
+            </div>
+
+            <div className="bg-gradient-to-br from-purple-900/40 to-purple-800/20 border border-purple-700/50 rounded-xl p-4">
+              <div className="text-purple-300 text-sm font-medium">Market Regime</div>
+              <div className="text-2xl font-bold text-purple-100 mt-1">{regime.volatility}</div>
+              <div className="text-purple-400 text-xs mt-1">{regime.trendBias} bias</div>
+            </div>
+          </div>
+
+          {/* Top 5 Picks */}
+          <div className="bg-gradient-to-br from-green-900/40 to-emerald-900/40 border border-green-700/50 rounded-2xl p-6 mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xl font-semibold text-green-100 flex items-center gap-2">
+                <span className="text-2xl">🌟</span>
+                Tomorrow's Top 5 Picks
+              </h2>
+              {topPicks.length > 0 && (
+                <div className="text-xs text-green-300 bg-green-900/30 px-3 py-1 rounded-full">
+                  MQScore Range: {topPicks[topPicks.length-1].mqScore.toFixed(1)} - {topPicks[0].mqScore.toFixed(1)}
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      </div>
+            <p className="text-xs text-green-300/70 mb-4">
+              Filters: {filtersUsed.join(" • ")}
+            </p>
 
-      {/* Quick Action Items */}
-      <div className="bg-slate-900/60 rounded-lg p-5 border border-slate-700">
-        <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-          <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-          </svg>
-          Tomorrow Morning Checklist:
-        </h3>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">1.</span>
-            <span className="text-slate-300">Upload pre-market CSV by 8:30 AM</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">2.</span>
-            <span className="text-slate-300">Filter for Gap% &gt; {Math.max(1, analysis.avgGapWinners - 0.5).toFixed(1)}%</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">3.</span>
-            <span className="text-slate-300">Check Strong Uptrend 📈 in indicators</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">4.</span>
-            <span className="text-slate-300">Get AI rankings from ChatGPT, Perplexity, DeepSeek</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">5.</span>
-            <span className="text-slate-300">Enter rankings & save before 9:15 AM</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-indigo-400 font-bold">6.</span>
-            <span className="text-slate-300">
-              {parseFloat(analysis.top5WinRate) > parseFloat(analysis.overallWinRate)
-                ? 'Trade ONLY AI Top 5 ⭐'
-                : 'Review all high-score signals'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Performance Comparison */}
-      {parseFloat(analysis.aiWinRate) > 0 && (
-        <div className="bg-slate-900/40 rounded-lg p-5 border border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3">📊 AI vs Score Performance:</h3>
-          <div className="flex items-center gap-6 text-sm">
-            <div className="flex-1">
-              <div className="flex justify-between mb-1">
-                <span className="text-slate-400">AI Top 5 Win Rate</span>
-                <span className="font-bold text-yellow-400">{analysis.top5WinRate}%</span>
+            {topPicks.length === 0 ? (
+              <div className="bg-slate-800/50 rounded-lg p-8 text-center">
+                <p className="text-slate-400">No signals meet tomorrow's criteria. Review filters or wait for new data.</p>
               </div>
-              <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-yellow-600 to-yellow-400 rounded-full"
-                  style={{ width: `${analysis.top5WinRate}%` }}
-                ></div>
-              </div>
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between mb-1">
-                <span className="text-slate-400">Overall Win Rate</span>
-                <span className="font-bold text-slate-300">{analysis.overallWinRate}%</span>
-              </div>
-              <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-slate-600 to-slate-400 rounded-full"
-                  style={{ width: `${analysis.overallWinRate}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 text-xs text-center">
-            {parseFloat(analysis.top5WinRate) > parseFloat(analysis.overallWinRate) + 10 ? (
-              <span className="text-emerald-400">🎉 AI consensus significantly outperformed! Use it tomorrow.</span>
-            ) : parseFloat(analysis.top5WinRate) > parseFloat(analysis.overallWinRate) ? (
-              <span className="text-yellow-400">✅ AI consensus slightly better. Keep using it.</span>
             ) : (
-              <span className="text-slate-400">⚠️ AI consensus didn't help today. Focus on high Score instead.</span>
+              <ol className="space-y-3">
+                {topPicks.map((pick) => (
+                  <li
+                    key={pick.symbol}
+                    className="flex items-center justify-between rounded-xl bg-slate-800/60 border border-green-700/30 px-4 py-3 hover:bg-slate-800/80 transition-colors"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-green-600/20 border border-green-500/50 flex items-center justify-center font-bold text-green-300">
+                          {pick.rank}
+                        </div>
+                        <div>
+                          <div className="font-semibold text-lg text-green-100 flex items-center gap-2">
+                            {pick.symbol}
+                            {pick.row.hitTarget && (
+                              <span className="text-xs bg-emerald-600/20 text-emerald-400 px-2 py-0.5 rounded">
+                                ✓ Target Hit Today
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1">
+                            {pick.reasons
+                              .slice(0, 5) // Show first 5 reasons
+                              .map((r) =>
+                                r.value ? `${r.label}: ${r.value}` : r.label
+                              )
+                              .join(" · ")}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right ml-4">
+                      <div className="text-lg font-bold text-green-300">
+                        {pick.mqScore.toFixed(2)}<span className="text-xs text-slate-500">/10</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        MQ Score
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        Base: {pick.baseScore.toFixed(1)}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
             )}
           </div>
-        </div>
-      )}
 
-      {/* Bottom Summary */}
-      <div className="bg-indigo-900/20 rounded-lg p-4 border border-indigo-700/40">
-        <div className="flex items-center gap-3">
-          <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-sm text-indigo-200">
-            <strong>Bottom Line:</strong> {
-              parseFloat(analysis.top5WinRate) >= 70 
-                ? '🔥 AI Top 5 had excellent win rate. Repeat this process tomorrow!'
-                : parseFloat(analysis.top5WinRate) >= 50
-                ? '✅ AI Top 5 had good win rate. Continue using AI consensus.'
-                : parseFloat(analysis.overallWinRate) >= 50
-                ? '⚠️ Overall strategy works, but AI selection needs refinement.'
-                : '❌ Review your strategy parameters. Consider adjusting entry/target levels.'
-            }
-          </p>
+          {/* Market Regime Analysis */}
+          <div className="bg-slate-900/60 border border-slate-700 rounded-2xl p-6 mb-6">
+            <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center gap-2">
+              <span className="text-2xl">📊</span>
+              Market Regime Analysis
+            </h2>
+            <div className="flex gap-4 mb-4">
+              <div className="flex-1 bg-slate-800/50 rounded-lg p-3">
+                <div className="text-xs text-slate-400">Volatility</div>
+                <div className="text-xl font-bold text-slate-100 mt-1">{regime.volatility}</div>
+              </div>
+              <div className="flex-1 bg-slate-800/50 rounded-lg p-3">
+                <div className="text-xs text-slate-400">Trend Bias</div>
+                <div className="text-xl font-bold text-slate-100 mt-1">{regime.trendBias}</div>
+              </div>
+            </div>
+            <ul className="space-y-2 text-sm text-slate-300">
+              {regime.notes.map((note, idx) => (
+                <li key={idx} className="flex items-start gap-2">
+                  <span className="text-blue-400 mt-0.5">•</span>
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Avoid List */}
+          <div className="bg-slate-900/60 border border-red-700/30 rounded-2xl p-6 mb-6">
+            <h2 className="text-xl font-semibold text-red-400 mb-4 flex items-center gap-2">
+              <span className="text-2xl">⚠️</span>
+              Avoid List
+            </h2>
+            {avoidList.length === 0 ? (
+              <p className="text-slate-400">No strong avoid signals today. All setups look reasonable.</p>
+            ) : (
+              <ul className="space-y-2">
+                {avoidList.map((item) => (
+                  <li
+                    key={item.symbol}
+                    className="bg-red-900/20 border border-red-700/30 rounded-lg p-3 text-sm"
+                  >
+                    <span className="font-semibold text-red-100">{item.symbol}</span>
+                    <span className="text-slate-400"> – </span>
+                    <span className="text-slate-300">
+                      {item.reasons
+                        .map((r) => (r.value ? `${r.label} (${r.value})` : r.label))
+                        .join(" · ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Trading Strategy */}
+          <div className="bg-gradient-to-br from-blue-900/40 to-purple-900/40 border border-blue-700/50 rounded-2xl p-6 mb-6">
+            <h2 className="text-xl font-semibold text-blue-100 mb-4 flex items-center gap-2">
+              <span className="text-2xl">📈</span>
+              Tomorrow's Trading Strategy
+            </h2>
+            <div className="space-y-3 text-slate-200">
+              <div className="flex items-start gap-3">
+                <span className="text-blue-400 font-bold">1.</span>
+                <div>
+                  <div className="font-medium">Focus on MQScore {`>`} 6.0</div>
+                  <div className="text-sm text-slate-400">
+                    Momentum Quality Score combines Gap%, RS20D, Trend, Near High, and VWAP%. Higher = better setup quality.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-blue-400 font-bold">2.</span>
+                <div>
+                  <div className="font-medium">Market Regime: {regime.volatility} Volatility</div>
+                  <div className="text-sm text-slate-400">
+                    {regime.volatility === 'HIGH' 
+                      ? 'Use wider stops and smaller position sizes. Expect choppy moves.'
+                      : regime.volatility === 'LOW'
+                      ? 'Clean trends expected. Avoid scalping, let winners run.'
+                      : 'Normal volatility. Standard risk management applies.'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-blue-400 font-bold">3.</span>
+                <div>
+                  <div className="font-medium">Trend Bias: {regime.trendBias}</div>
+                  <div className="text-sm text-slate-400">
+                    {regime.trendBias === 'BULLISH'
+                      ? 'Favor LONG setups. Look for breakouts and buy-the-dip opportunities.'
+                      : regime.trendBias === 'BEARISH'
+                      ? 'Be cautious with LONGs. Wait for confirmation or consider sitting out.'
+                      : 'Mixed signals. Be selective and wait for clear setups only.'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-blue-400 font-bold">4.</span>
+                <div>
+                  <div className="font-medium">Avoid List</div>
+                  <div className="text-sm text-slate-400">
+                    {avoidList.length > 0
+                      ? `Skip ${avoidList.length} stocks: ${avoidList.slice(0, 5).map(a => a.symbol).join(', ')}${avoidList.length > 5 ? '...' : ''}`
+                      : 'No specific avoids today. Trust your filters.'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Pre-Market Checklist */}
+          <div className="bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-700/50 rounded-2xl p-6">
+            <h2 className="text-xl font-semibold text-indigo-100 mb-4 flex items-center gap-2">
+              <span className="text-2xl">☑️</span>
+              Pre-Market Checklist
+            </h2>
+            <div className="space-y-2 text-slate-300">
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Review pre-market movers & sector rotation</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Check Nifty50 trend & global cues</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Upload today's CSV and generate signals</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Review Top 5 picks - Focus on MQScore {`>`} 6.0</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Cross-check with Avoid List - Skip these symbols</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Set price alerts for Top 5 entry levels</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Review risk: Max 2-3% per trade, 10% total exposure</span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer hover:bg-slate-800/50 p-2 rounded transition-colors">
+                <input type="checkbox" className="w-5 h-5 rounded border-slate-600" />
+                <span>Adjust stops based on {regime.volatility} volatility regime</span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
