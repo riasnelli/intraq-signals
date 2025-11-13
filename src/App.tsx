@@ -191,7 +191,7 @@ export default function App() {
     };
   };
 
-  const runBacktest = async (batch: any) => {
+  const runBacktest = async (batch: any, backtestAllOverride: boolean = false) => {
     // Check if backtest is allowed (time-based check)
     const timeCheck = canRunBacktest(batch.date);
     if (!timeCheck.allowed) {
@@ -199,7 +199,7 @@ export default function App() {
       return;
     }
     
-    // Filter for AI-ranked signals (Top 5 only if rankings exist)
+    // Filter for AI-ranked signals (Top 5)
     const rankedSignals = batch.signals
       .map((s: any) => ({
         ...s,
@@ -209,31 +209,47 @@ export default function App() {
       .sort((a: any, b: any) => (a.avgScore || 999) - (b.avgScore || 999))
       .slice(0, 5); // Top 5 only
     
-    // If no AI rankings, backtest all signals
-    const signalsToBacktest = rankedSignals.length > 0 ? rankedSignals : batch.signals;
+    // Decide which signals to backtest
+    let signalsToBacktest;
+    let backtestMode: 'top5' | 'all';
+    
+    if (backtestAllOverride || rankedSignals.length === 0) {
+      // Backtest all signals
+      signalsToBacktest = batch.signals;
+      backtestMode = 'all';
+    } else {
+      // Let user choose
+      const choice = confirm(
+        `🤖 AI Top 5 Detected:\n\n${rankedSignals.map((s: any, i: number) => `${i+1}. ${s.symbol}`).join('\n')}\n\n────────────────────────────\n\nClick OK → Backtest Top 5 only (⭐ ~5 sec)\nClick Cancel → Backtest all ${batch.signals.length} signals (~${batch.signals.length} sec)`
+      );
+      
+      if (choice) {
+        signalsToBacktest = rankedSignals;
+        backtestMode = 'top5';
+      } else {
+        signalsToBacktest = batch.signals;
+        backtestMode = 'all';
+      }
+    }
     
     // Check if backtest already exists
     const hasBacktest = signalsToBacktest.some((s: any) => s.backtest);
     if (hasBacktest) {
       const rerun = confirm(
-        `Backtest data already exists for ${rankedSignals.length > 0 ? 'AI Top 5' : 'these'} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
+        `Backtest data already exists for ${backtestMode === 'top5' ? 'AI Top 5' : 'these'} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
       );
       if (!rerun) return;
-    }
-    
-    // Confirm if backtesting only top 5
-    if (rankedSignals.length > 0 && rankedSignals.length < batch.signals.length) {
-      const confirm5 = confirm(
-        `🤖 AI Top 5 Selected:\n\n${rankedSignals.map((s: any, i: number) => `${i+1}. ${s.symbol}`).join('\n')}\n\nBacktest these ${rankedSignals.length} stocks only?\n\n(To backtest all ${batch.signals.length} stocks, remove AI rankings first)`
-      );
-      if (!confirm5) return;
     }
 
     setBacktestingBatchId(batch.id);
     setBacktestProgress({ current: 0, total: signalsToBacktest.length });
     
+    console.log(`🎯 Backtesting ${backtestMode === 'top5' ? 'AI Top 5' : 'all'} signals (${signalsToBacktest.length} stocks)`);
+    console.log(`⏱️ Estimated time: ~${signalsToBacktest.length} seconds (dynamic rate limiting)`);
+    
     try {
       // Pass progress callback to backtestBatch
+      // The dynamic delay is automatically calculated in backtestBatch based on count
       const results = await backtestBatch(
         signalsToBacktest,
         (current, total) => setBacktestProgress({ current, total })
@@ -247,7 +263,7 @@ export default function App() {
       const noDataCount = results.filter(r => r.backtest?.noData).length;
       const totalCount = results.length;
       
-      let message = rankedSignals.length > 0 
+      let message = backtestMode === 'top5'
         ? `✅ Backtest completed for AI Top ${totalCount} stocks! ⭐\n\n`
         : `✅ Backtest completed for ${totalCount} signals!\n\n`;
       
@@ -821,10 +837,10 @@ export default function App() {
                                   !timeCheck.allowed 
                                     ? 'Backtest available after 4:00 PM IST' 
                                     : batch.signals.some((s: any) => s.backtest) 
-                                    ? `Backtest completed (${top5Count} AI Top 5 stocks)` 
+                                    ? 'Backtest completed - Click to re-run' 
                                     : top5Count > 0 
-                                    ? `Backtest AI Top ${top5Count} stocks only`
-                                    : 'Run backtest on all stocks'
+                                    ? `Choose: Top ${top5Count} AI picks (⭐ ~${top5Count}s) or All ${batch.signals.length} stocks (~${batch.signals.length}s)`
+                                    : `Run backtest on all ${batch.signals.length} stocks (~${batch.signals.length}s)`
                                 }
                               >
                                 {!timeCheck.allowed ? (
@@ -846,14 +862,14 @@ export default function App() {
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
-                                    Backtested {top5Count > 0 && `(Top ${top5Count} ⭐)`}
+                                    ✓ Backtested
                                   </>
                                 ) : (
                                   <>
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                                     </svg>
-                                    Backtest {top5Count > 0 && `(Top ${top5Count} ⭐)`}
+                                    Backtest {top5Count > 0 ? `(Top ${top5Count} ⭐ or All)` : `(${batch.signals.length} stocks)`}
                                   </>
                                 )}
                               </button>
