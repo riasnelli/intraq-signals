@@ -7,6 +7,9 @@ import { toNum } from "./utils";
 import Settings from "./components/Settings";
 import Insights from "./components/Insights";
 import { backtestBatch } from "./backtest";
+import { enrichSignalRow, BaseSignalRow, IndicatorContext } from "./signalMetrics";
+import { generateMockCandles, generateNiftyCandles } from "./mockCandleData";
+import sectorMap from "./utils/sectorMap";
 
 type Raw = Record<string, string>;
 
@@ -344,21 +347,88 @@ export default function App() {
   };
 
   const saveSignals = async () => {
-    const batch = signals.map((s: any) => ({
-      id: `${today}-${strategy}-${s.symbol}`,
-      date: today,
-      symbol: s.symbol,
-      strategy,
-      side: s.side,
-      score: s.score,
-      entry: s.entry,
-      target: s.target,
-      stopLoss: s.stopLoss,
-      riskReward: s.riskReward,
-      details: { why: s.why, csvFileName }
-    }));
+    console.log(`🔄 Calculating technical indicators for ${signals.length} signals...`);
+    
+    // Generate Nifty50 candles once (used for all stocks)
+    const niftyCandles = generateNiftyCandles(60);
+    
+    const batch = signals.map((s: any) => {
+      // Find the original row data for this symbol
+      const originalRow = rows.find(r => r.symbol === s.symbol);
+      const prevClose = originalRow?.prev_close ?? s.entry * 0.99;
+      const preOpenPrice = originalRow?.iep ?? s.entry;
+      
+      // Generate mock candle data for this symbol
+      const symbolCandles = generateMockCandles(s.symbol, s.entry, 60);
+      
+      // Create base signal row for enrichment
+      const baseSignal: BaseSignalRow = {
+        symbol: s.symbol,
+        side: s.side,
+        entry: s.entry,
+        target: s.target,
+        stopLoss: s.stopLoss,
+        rr: parseFloat(s.riskReward || '0'),
+        score: s.score,
+        prevClose: prevClose,
+        preOpenPrice: preOpenPrice,
+        preOpenVolume: originalRow?.final_qty ?? 100000, // Use final_qty as pre-open volume
+        currentPrice: s.entry,
+        avg30dVolume: 1000000, // Mock average volume
+        vwap: s.entry * (0.995 + Math.random() * 0.01), // Mock VWAP around entry
+      };
+      
+      // Create indicator context
+      const context: IndicatorContext = {
+        symbolDaily: symbolCandles,
+        indexDaily: niftyCandles,
+        sectorName: sectorMap[s.symbol] || 'UNKNOWN',
+        avg30dVolume: 1000000,
+        // Mock sector performance (can be enhanced with real data later)
+        sectorPerf1D: -1 + Math.random() * 2, // -1% to +1%
+        sectorPerf5D: -3 + Math.random() * 6, // -3% to +3%
+        sectorPerf20D: -5 + Math.random() * 10, // -5% to +5%
+      };
+      
+      // Enrich with technical indicators
+      const enriched = enrichSignalRow(baseSignal, context);
+      
+      return {
+        id: `${today}-${strategy}-${s.symbol}`,
+        date: today,
+        symbol: s.symbol,
+        strategy,
+        side: s.side,
+        score: s.score,
+        entry: s.entry,
+        target: s.target,
+        stopLoss: s.stopLoss,
+        riskReward: s.riskReward,
+        sector: sectorMap[s.symbol] || 'UNKNOWN',
+        details: { why: s.why, csvFileName },
+        // Technical indicators
+        gapPercent: enriched.gapPercent,
+        preMarketVolumeSurge: enriched.preMarketVolumeSurge,
+        atr14: enriched.atr14,
+        volatilityRank: enriched.volatilityRank,
+        prevDayHigh: enriched.prevDayHigh,
+        prevDayLow: enriched.prevDayLow,
+        nearDayHigh: enriched.nearDayHigh,
+        nearDayLow: enriched.nearDayLow,
+        ema5: enriched.ema5,
+        ema20: enriched.ema20,
+        ema50: enriched.ema50,
+        trendStatus: enriched.trendStatus,
+        relativeStrength20D: enriched.relativeStrength20D,
+        vwapDistancePercent: enriched.vwapDistancePercent,
+        sectorScore: enriched.sectorScore,
+        liquidityRating: enriched.liquidityRating,
+      };
+    });
+    
     await db.signals.bulkPut(batch);
-    alert(`✅ Saved ${batch.length} signals for ${today}\n\nClick "View History" to see all saved signals.`);
+    console.log(`✅ Saved ${batch.length} signals with technical indicators`);
+    alert(`✅ Saved ${batch.length} signals for ${today}\n\nTechnical indicators calculated for all stocks.\n\nClick "View History" to see results.`);
   };
 
   return (
