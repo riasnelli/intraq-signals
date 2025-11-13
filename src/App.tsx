@@ -199,22 +199,43 @@ export default function App() {
       return;
     }
     
+    // Filter for AI-ranked signals (Top 5 only if rankings exist)
+    const rankedSignals = batch.signals
+      .map((s: any) => ({
+        ...s,
+        avgScore: calculateAverageScore(s.chatGptRank, s.perplexityRank, s.deepSeekRank)
+      }))
+      .filter((s: any) => s.avgScore !== undefined)
+      .sort((a: any, b: any) => (a.avgScore || 999) - (b.avgScore || 999))
+      .slice(0, 5); // Top 5 only
+    
+    // If no AI rankings, backtest all signals
+    const signalsToBacktest = rankedSignals.length > 0 ? rankedSignals : batch.signals;
+    
     // Check if backtest already exists
-    const hasBacktest = batch.signals.some((s: any) => s.backtest);
+    const hasBacktest = signalsToBacktest.some((s: any) => s.backtest);
     if (hasBacktest) {
       const rerun = confirm(
-        `Backtest data already exists for this batch.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
+        `Backtest data already exists for ${rankedSignals.length > 0 ? 'AI Top 5' : 'these'} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
       );
       if (!rerun) return;
     }
+    
+    // Confirm if backtesting only top 5
+    if (rankedSignals.length > 0 && rankedSignals.length < batch.signals.length) {
+      const confirm5 = confirm(
+        `🤖 AI Top 5 Selected:\n\n${rankedSignals.map((s: any, i: number) => `${i+1}. ${s.symbol}`).join('\n')}\n\nBacktest these ${rankedSignals.length} stocks only?\n\n(To backtest all ${batch.signals.length} stocks, remove AI rankings first)`
+      );
+      if (!confirm5) return;
+    }
 
     setBacktestingBatchId(batch.id);
-    setBacktestProgress({ current: 0, total: batch.signals.length });
+    setBacktestProgress({ current: 0, total: signalsToBacktest.length });
     
     try {
       // Pass progress callback to backtestBatch
       const results = await backtestBatch(
-        batch.signals,
+        signalsToBacktest,
         (current, total) => setBacktestProgress({ current, total })
       );
       
@@ -226,7 +247,9 @@ export default function App() {
       const noDataCount = results.filter(r => r.backtest?.noData).length;
       const totalCount = results.length;
       
-      let message = `✅ Backtest completed for ${totalCount} signals!\n\n`;
+      let message = rankedSignals.length > 0 
+        ? `✅ Backtest completed for AI Top ${totalCount} stocks! ⭐\n\n`
+        : `✅ Backtest completed for ${totalCount} signals!\n\n`;
       
       if (dhanCount > 0) {
         message += `🟢 Dhan API: ${dhanCount} stocks\n`;
@@ -691,63 +714,9 @@ export default function App() {
                     {batch.isExpanded && (
                       <div className="border-t border-slate-800 p-2 space-y-3">
                         {/* Action Buttons - Only visible when expanded */}
-                        <div className="flex items-center gap-2 pb-2 border-b border-slate-800/50">
-                          {(() => {
-                            const timeCheck = canRunBacktest(batch.date);
-                            const isDisabled = !timeCheck.allowed || backtestingBatchId === batch.id;
-                            
-                            return (
-                              <button
-                                onClick={() => runBacktest(batch)}
-                                disabled={isDisabled}
-                                className={`${
-                                  !timeCheck.allowed
-                                    ? 'bg-slate-700/20 border-slate-600/50 text-slate-500'
-                                    : batch.signals.some((s: any) => s.backtest)
-                                    ? 'bg-green-600/20 border-green-600/50 text-green-400 hover:bg-green-600/30'
-                                    : 'bg-purple-600/20 border-purple-600/50 text-purple-400 hover:bg-purple-600/30'
-                                } disabled:opacity-50 disabled:cursor-not-allowed border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
-                                title={
-                                  !timeCheck.allowed 
-                                    ? 'Backtest available after 4:00 PM IST' 
-                                    : batch.signals.some((s: any) => s.backtest) 
-                                    ? 'Backtest completed' 
-                                    : 'Run backtest'
-                                }
-                              >
-                                {!timeCheck.allowed ? (
-                                  <>
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    Backtest (After 4 PM)
-                                  </>
-                                ) : backtestingBatchId === batch.id ? (
-                                  <>
-                                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                    </svg>
-                                    {backtestProgress ? `Processing ${backtestProgress.current}/${backtestProgress.total}...` : 'Running...'}
-                                  </>
-                                ) : batch.signals.some((s: any) => s.backtest) ? (
-                                  <>
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    Backtested
-                                  </>
-                                ) : (
-                                  <>
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                </svg>
-                                Backtest
-                              </>
-                                )}
-                              </button>
-                            );
-                          })()}
-                          
+                        <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800/50">
+                          {/* Left Side Buttons */}
+                          <div className="flex items-center gap-2">
                           {batch.signals.some((s: any) => s.backtest) && (
                             <button
                               onClick={() => setExpandedInsightsBatchId(
@@ -822,6 +791,75 @@ export default function App() {
                           </svg>
                           {showIndicators ? 'Hide Indicators' : 'Indicators'}
                         </button>
+                        </div>
+                        
+                        {/* Right Side - Backtest Button */}
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const timeCheck = canRunBacktest(batch.date);
+                            const isDisabled = !timeCheck.allowed || backtestingBatchId === batch.id;
+                            
+                            // Count AI-ranked stocks (top 5)
+                            const aiRankedSignals = batch.signals.filter((s: any) => {
+                              const avgScore = calculateAverageScore(s.chatGptRank, s.perplexityRank, s.deepSeekRank);
+                              return avgScore !== undefined;
+                            });
+                            const top5Count = Math.min(aiRankedSignals.length, 5);
+                            
+                            return (
+                              <button
+                                onClick={() => runBacktest(batch)}
+                                disabled={isDisabled}
+                                className={`${
+                                  !timeCheck.allowed
+                                    ? 'bg-slate-700/20 border-slate-600/50 text-slate-500'
+                                    : batch.signals.some((s: any) => s.backtest)
+                                    ? 'bg-green-600/20 border-green-600/50 text-green-400 hover:bg-green-600/30'
+                                    : 'bg-purple-600/20 border-purple-600/50 text-purple-400 hover:bg-purple-600/30'
+                                } disabled:opacity-50 disabled:cursor-not-allowed border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                                title={
+                                  !timeCheck.allowed 
+                                    ? 'Backtest available after 4:00 PM IST' 
+                                    : batch.signals.some((s: any) => s.backtest) 
+                                    ? `Backtest completed (${top5Count} AI Top 5 stocks)` 
+                                    : top5Count > 0 
+                                    ? `Backtest AI Top ${top5Count} stocks only`
+                                    : 'Run backtest on all stocks'
+                                }
+                              >
+                                {!timeCheck.allowed ? (
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Backtest (After 4 PM)
+                                  </>
+                                ) : backtestingBatchId === batch.id ? (
+                                  <>
+                                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    {backtestProgress ? `Processing ${backtestProgress.current}/${backtestProgress.total}...` : 'Running...'}
+                                  </>
+                                ) : batch.signals.some((s: any) => s.backtest) ? (
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Backtested {top5Count > 0 && `(Top ${top5Count} ⭐)`}
+                                  </>
+                                ) : (
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                    </svg>
+                                    Backtest {top5Count > 0 && `(Top ${top5Count} ⭐)`}
+                                  </>
+                                )}
+                              </button>
+                            );
+                          })()}
+                        </div>
                         </div>
                         
                         {/* Statistics - Show if backtest data exists */}
