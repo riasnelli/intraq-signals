@@ -18,6 +18,23 @@ export type TSignal = {
   perplexityRank?: number;   // 1-5 ranking from Perplexity
   deepSeekRank?: number;     // 1-5 ranking from DeepSeek
   finalRank?: number;        // Consolidated ranking (1-5) based on all 3 AIs
+  // Technical Indicators (from signalMetrics.ts)
+  gapPercent?: number;
+  preMarketVolumeSurge?: number;
+  atr14?: number;
+  volatilityRank?: number;
+  prevDayHigh?: number;
+  prevDayLow?: number;
+  nearDayHigh?: boolean;
+  nearDayLow?: boolean;
+  ema5?: number;
+  ema20?: number;
+  ema50?: number;
+  trendStatus?: 'Strong Uptrend' | 'Weak Uptrend' | 'Consolidation' | 'Downtrend';
+  relativeStrength20D?: number;
+  vwapDistancePercent?: number | null;
+  sectorScore?: number | null;
+  liquidityRating?: 'LOW' | 'MEDIUM' | 'HIGH';
   backtest?: {
     entryHit: boolean;
     entryHitTime?: string;

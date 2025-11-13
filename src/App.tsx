@@ -22,6 +22,7 @@ export default function App() {
   const [backtestProgress, setBacktestProgress] = useState<{current: number, total: number} | null>(null);
   const [expandedInsightsBatchId, setExpandedInsightsBatchId] = useState<string | null>(null);
   const [pendingRankings, setPendingRankings] = useState<Map<string, {chatGpt?: number, perplexity?: number, deepSeek?: number}>>(new Map());
+  const [showIndicators, setShowIndicators] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
@@ -697,6 +698,22 @@ export default function App() {
                             Save ({pendingRankings.size})
                           </button>
                         )}
+                        
+                        {/* Toggle Technical Indicators */}
+                        <button
+                          onClick={() => setShowIndicators(!showIndicators)}
+                          className={`${
+                            showIndicators
+                              ? 'bg-cyan-600/20 border-cyan-600/50 text-cyan-400'
+                              : 'bg-slate-700/50 border-slate-600 text-slate-300 hover:bg-cyan-600/20 hover:border-cyan-600/50'
+                          } border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                          title={showIndicators ? 'Hide technical indicators' : 'Show 10 technical indicators'}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                          {showIndicators ? 'Hide Indicators' : 'Indicators'}
+                        </button>
                         </div>
                         
                         {/* Statistics - Show if backtest data exists */}
@@ -765,6 +782,21 @@ export default function App() {
                               <th className="text-center px-2 py-1 text-xs text-purple-400">Perp</th>
                               <th className="text-center px-2 py-1 text-xs text-green-400">Deep</th>
                               <th className="text-center px-2 py-1 text-xs text-yellow-400">Final</th>
+                              {/* Technical Indicators - Toggleable */}
+                              {showIndicators && (
+                                <>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">Gap%</th>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">Vol Surge%</th>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">ATR</th>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">Vol Rank</th>
+                                  <th className="text-center px-2 py-1 text-xs text-cyan-400">Near High</th>
+                                  <th className="text-center px-2 py-1 text-xs text-cyan-400">Near Low</th>
+                                  <th className="text-center px-2 py-1 text-xs text-cyan-400">Trend</th>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">RS 20D</th>
+                                  <th className="text-right px-2 py-1 text-xs text-cyan-400">VWAP%</th>
+                                  <th className="text-center px-2 py-1 text-xs text-cyan-400">Liquidity</th>
+                                </>
+                              )}
                               {batch.signals.some((s: any) => s.backtest) && (
                                 <>
                                   <th className="text-center px-2 py-1">Hit</th>
@@ -865,6 +897,55 @@ export default function App() {
                                       {s.finalRank || '-'}
                                     </span>
                                   </td>
+                                  {/* Technical Indicators - Toggleable */}
+                                  {showIndicators && (
+                                    <>
+                                      <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.gapPercent?.toFixed(2) ?? '-'}</td>
+                                      <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.preMarketVolumeSurge?.toFixed(0) ?? '-'}</td>
+                                      <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.atr14?.toFixed(2) ?? '-'}</td>
+                                      <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.volatilityRank?.toFixed(0) ?? '-'}</td>
+                                      <td className="px-2 py-1 text-center text-xs">
+                                        <span className={s.nearDayHigh ? 'text-emerald-400' : 'text-slate-600'}>
+                                          {s.nearDayHigh ? '✓' : '✗'}
+                                        </span>
+                                      </td>
+                                      <td className="px-2 py-1 text-center text-xs">
+                                        <span className={s.nearDayLow ? 'text-red-400' : 'text-slate-600'}>
+                                          {s.nearDayLow ? '✓' : '✗'}
+                                        </span>
+                                      </td>
+                                      <td className="px-2 py-1 text-center text-xs">
+                                        <span className={`px-1 py-0.5 rounded text-[10px] ${
+                                          s.trendStatus === 'Strong Uptrend' ? 'bg-emerald-900/40 text-emerald-300' :
+                                          s.trendStatus === 'Weak Uptrend' ? 'bg-emerald-900/20 text-emerald-400' :
+                                          s.trendStatus === 'Downtrend' ? 'bg-red-900/40 text-red-300' :
+                                          'bg-slate-800 text-slate-400'
+                                        }`}>
+                                          {s.trendStatus === 'Strong Uptrend' ? '⬆⬆' :
+                                           s.trendStatus === 'Weak Uptrend' ? '⬆' :
+                                           s.trendStatus === 'Downtrend' ? '⬇' :
+                                           '↔'}
+                                        </span>
+                                      </td>
+                                      <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.relativeStrength20D?.toFixed(2) ?? '-'}</td>
+                                      <td className={`px-2 py-1 text-right text-xs ${
+                                        s.vwapDistancePercent && s.vwapDistancePercent > 0 ? 'text-emerald-400' :
+                                        s.vwapDistancePercent && s.vwapDistancePercent < 0 ? 'text-red-400' :
+                                        'text-slate-500'
+                                      }`}>
+                                        {s.vwapDistancePercent?.toFixed(2) ?? '-'}
+                                      </td>
+                                      <td className="px-2 py-1 text-center text-xs">
+                                        <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${
+                                          s.liquidityRating === 'HIGH' ? 'bg-emerald-900/40 text-emerald-300' :
+                                          s.liquidityRating === 'MEDIUM' ? 'bg-yellow-900/40 text-yellow-300' :
+                                          'bg-slate-800 text-slate-400'
+                                        }`}>
+                                          {s.liquidityRating ?? 'LOW'}
+                                        </span>
+                                      </td>
+                                    </>
+                                  )}
                                   {batch.signals.some((sig: any) => sig.backtest) && (
                                     <>
                                       <td className={`px-2 py-1 text-center text-xs font-medium ${
