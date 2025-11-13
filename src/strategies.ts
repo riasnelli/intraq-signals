@@ -1,4 +1,4 @@
-import { calculateMomentumScore } from './momentumScore';
+import { calculateMomentumScoreNumeric } from './momentumScoreFromCsv';
 
 export type Row = {
   symbol: string;
@@ -29,8 +29,8 @@ export function momentumGapLong(rows: Row[]): Signal[] {
       const gapPct = ((r.iep - r.prev_close)/r.prev_close)*100;
       
       // Use new normalized scoring (0-10 scale)
-      const score = calculateMomentumScore({
-        gapPct,
+      const score = calculateMomentumScoreNumeric({
+        prevClose: r.prev_close,
         iep: r.iep,
         nm52wHigh: r.nm_52w_h,
         avgTurnoverCr: r.value_cr,
