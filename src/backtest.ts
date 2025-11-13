@@ -75,19 +75,10 @@ export async function backtestSignal(signal: TSignal): Promise<TSignal> {
   let dataSource: 'dhan' | 'yfinance' | undefined;
 
   // Fetch real data from Dhan API (with yfinance fallback on backend)
+  // If Dhan not configured, we'll let the backend try Yahoo Finance fallback
   if (!dhanApi.isConfigured()) {
-    console.warn(`⚠️ Dhan API not configured, skipping ${signal.symbol}`);
-    return {
-      ...signal,
-      backtest: {
-        entryHit: false,
-        targetHit: false,
-        slHit: false,
-        outcome: undefined,
-        usedRealData: false,
-        noData: true
-      }
-    };
+    console.warn(`⚠️ Dhan API not configured, will use Yahoo Finance fallback for ${signal.symbol}`);
+    // Don't return early - let it try the backend which has yfinance fallback
   }
   
   try {

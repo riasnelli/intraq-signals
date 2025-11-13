@@ -64,19 +64,19 @@ export class DhanApiService {
   ): Promise<{ data: IntradayDataPoint[], dataSource?: 'dhan' | 'yfinance' }> {
     const creds = this.getCredentials();
 
-    if (!creds) {
-      throw new Error('Dhan API credentials not configured');
-    }
-
+    // Allow fetching even without credentials - backend will use Yahoo Finance fallback
     console.log(`📡 Fetching historical data for ${symbol} on ${date} via backend...`);
     console.log(`📋 Backend URL: ${this.backendUrl}`);
+    if (!creds) {
+      console.warn(`⚠️ Dhan credentials not configured, backend will use Yahoo Finance fallback`);
+    }
 
     try {
       const securityId = getSecurityId(symbol);
       
       const requestBody = {
-        clientId: creds.clientId,
-        accessToken: creds.accessToken,
+        clientId: creds?.clientId || '',
+        accessToken: creds?.accessToken || '',
         symbol: symbol,
         securityId: securityId,
         exchangeSegment: exchange === 'NSE' ? 'NSE_EQ' : 'BSE_EQ',
