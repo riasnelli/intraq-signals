@@ -72,33 +72,50 @@ function to12Hour(time24: string): string {
 export async function backtestSignal(signal: TSignal): Promise<TSignal> {
   let intradayData: Array<{ time: string; price: number; high: number; low: number }>;
   let usedRealData = false;
+  let dataSource: 'dhan' | 'yfinance' | undefined;
 
-  // Try to fetch real data from Dhan API
-  if (dhanApi.isConfigured()) {
-    try {
-      console.log(`🔍 Attempting to fetch real data for ${signal.symbol} on ${signal.date}`);
-      
-      const realData = await dhanApi.fetchIntradayData(signal.symbol, signal.date);
-      
-      if (realData && realData.length > 0) {
-        intradayData = realData;
-        usedRealData = true;
-        console.log(`✅ Using REAL DATA: ${realData.length} data points for ${signal.symbol}`);
-      } else {
-        throw new Error('No data received from Dhan API');
+  // Fetch real data from Dhan API (with yfinance fallback on backend)
+  if (!dhanApi.isConfigured()) {
+    console.warn(`⚠️ Dhan API not configured, skipping ${signal.symbol}`);
+    return {
+      ...signal,
+      backtest: {
+        entryHit: false,
+        targetHit: false,
+        slHit: false,
+        outcome: undefined,
+        usedRealData: false,
+        noData: true
       }
-    } catch (error: any) {
-      console.warn(`⚠️ Dhan API failed for ${signal.symbol}: ${error.message}`);
-      console.log(`🎭 Falling back to mock data for ${signal.symbol}`);
-      // Fallback to mock data
-      intradayData = generateMockIntradayData(signal.date, signal.symbol, signal.entry);
-      usedRealData = false;
+    };
+  }
+  
+  try {
+    console.log(`🔍 Fetching real data for ${signal.symbol} on ${signal.date}`);
+    
+    const response = await dhanApi.fetchIntradayData(signal.symbol, signal.date);
+    
+    if (response.data && response.data.length > 0) {
+      intradayData = response.data;
+      usedRealData = true;
+      dataSource = response.dataSource;
+      console.log(`✅ Using REAL DATA: ${response.data.length} data points for ${signal.symbol} (source: ${dataSource})`);
+    } else {
+      throw new Error('No data available');
     }
-  } else {
-    console.log(`🎭 Dhan API not configured, using mock data for ${signal.symbol}`);
-    // Use mock data if API not configured
-    intradayData = generateMockIntradayData(signal.date, signal.symbol, signal.entry);
-    usedRealData = false;
+  } catch (error: any) {
+    console.warn(`⚠️ No data available for ${signal.symbol}, skipping backtest`);
+    return {
+      ...signal,
+      backtest: {
+        entryHit: false,
+        targetHit: false,
+        slHit: false,
+        outcome: undefined,
+        usedRealData: false,
+        noData: true
+      }
+    };
   }
   
   let entryHit = false;
@@ -208,16 +225,109 @@ export async function backtestSignal(signal: TSignal): Promise<TSignal> {
       outcome,
       timeToTarget,
       timeToSL,
-      usedRealData
+      usedRealData,
+      dataSource
     }
   };
 }
 
-// Backtest multiple signals
-export async function backtestBatch(signals: TSignal[]): Promise<TSignal[]> {
-  const results: TSignal[] = [];
+// Helper function to add delay between API calls (avoid rate limiting)
+function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Calculate optimal delay based on Dhan API rate limits
+// Dhan API allows ~2 requests per second (per their rate limit policy)
+// To be safe, we use 1 request per 1 second = 1000ms delay
+function calculateDhanDelay(signalCount: number): number {
+  // Conservative approach: 1 request per second
+  // This ensures we never hit the rate limit
+  const DHAN_RATE_LIMIT_DELAY = 1000; // 1 second per request
   
-  for (const signal of signals) {
+  console.log(`⏱️ Using ${DHAN_RATE_LIMIT_DELAY}ms delay between requests to avoid rate limiting`);
+  console.log(`⏱️ Estimated time: ~${Math.ceil(signalCount * DHAN_RATE_LIMIT_DELAY / 1000)} seconds for ${signalCount} stocks`);
+  
+  return DHAN_RATE_LIMIT_DELAY;
+}
+
+// Check if it's safe to backtest (market has closed)
+function checkBacktestTiming(date: string): { canBacktest: boolean, message: string } {
+  const signalDate = new Date(date + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  signalDate.setHours(0, 0, 0, 0);
+  
+  // If signal is from a past date, always safe
+  if (signalDate < today) {
+    return { canBacktest: true, message: 'Historical data available' };
+  }
+  
+  // If signal is from today, check if market has closed
+  if (signalDate.getTime() === today.getTime()) {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTimeMinutes = currentHour * 60 + currentMinute;
+    const marketCloseTime = 15 * 60 + 30; // 3:30 PM = 15:30
+    const dataAvailableTime = 16 * 60; // 4:00 PM = 16:00 (30 min after close)
+    
+    if (currentTimeMinutes < marketCloseTime) {
+      return { 
+        canBacktest: false, 
+        message: `⚠️ Market is still open! Backtest after 4:00 PM IST for complete data.\nCurrent time: ${now.toLocaleTimeString('en-IN')}`
+      };
+    } else if (currentTimeMinutes < dataAvailableTime) {
+      return { 
+        canBacktest: true, 
+        message: `⏳ Market just closed. Data might still be processing. If backtest fails, wait until 4:00 PM IST.`
+      };
+    } else {
+      return { canBacktest: true, message: 'Today\'s complete data should be available' };
+    }
+  }
+  
+  // Future date
+  return { 
+    canBacktest: false, 
+    message: `❌ Cannot backtest future date: ${date}. Signals must be from today or earlier.`
+  };
+}
+
+// Backtest multiple signals with progress tracking
+export async function backtestBatch(
+  signals: TSignal[], 
+  onProgress?: (current: number, total: number) => void
+): Promise<TSignal[]> {
+  // Check timing for the first signal (all signals in a batch are from the same date)
+  if (signals.length > 0) {
+    const timingCheck = checkBacktestTiming(signals[0].date);
+    if (!timingCheck.canBacktest) {
+      alert(timingCheck.message);
+      throw new Error(timingCheck.message);
+    } else if (timingCheck.message.includes('⏳')) {
+      console.warn(timingCheck.message);
+    } else {
+      console.log(`✅ ${timingCheck.message}`);
+    }
+  }
+  
+  const results: TSignal[] = [];
+  let noDataCount = 0;
+  const delayMs = calculateDhanDelay(signals.length);
+  
+  console.log(`🔄 Backtesting ${signals.length} signals with Dhan API rate-limit protection...`);
+  console.log(`⏱️ This will take approximately ${Math.ceil(signals.length * delayMs / 1000)} seconds`);
+  
+  for (let i = 0; i < signals.length; i++) {
+    const signal = signals[i];
+    
+    // Report progress
+    if (onProgress) {
+      onProgress(i + 1, signals.length);
+    }
+    
+    console.log(`[${i + 1}/${signals.length}] Processing ${signal.symbol}...`);
+    
     // Add sector if missing
     const signalWithSector = {
       ...signal,
@@ -227,6 +337,14 @@ export async function backtestBatch(signals: TSignal[]): Promise<TSignal[]> {
     const backtested = await backtestSignal(signalWithSector);
     results.push(backtested);
     
+    // Count stocks with no data
+    if (backtested.backtest?.noData) {
+      noDataCount++;
+      console.log(`  ⚠️ No data available for ${signal.symbol}`);
+    } else {
+      console.log(`  ✅ ${signal.symbol} completed (source: ${backtested.backtest?.dataSource || 'unknown'})`);
+    }
+    
     // Update in database
     if (signal.id) {
       await db.signals.update(signal.id, { 
@@ -234,6 +352,27 @@ export async function backtestBatch(signals: TSignal[]): Promise<TSignal[]> {
         backtest: backtested.backtest 
       });
     }
+    
+    // Add delay between requests to avoid Dhan API rate limiting
+    // Skip delay for the last stock or if no data was available (no API call made)
+    if (i < signals.length - 1 && !backtested.backtest?.noData) {
+      console.log(`  ⏳ Waiting ${delayMs}ms before next request...`);
+      await delay(delayMs);
+    }
+  }
+  
+  // Log summary
+  const successCount = results.length - noDataCount;
+  console.log(`\n✅ Backtest complete!`);
+  console.log(`  📊 Success: ${successCount}/${results.length} stocks`);
+  console.log(`  ⚠️ No data: ${noDataCount}/${results.length} stocks`);
+  
+  if (noDataCount > 0) {
+    const noDataSymbols = results
+      .filter(r => r.backtest?.noData)
+      .map(r => r.symbol)
+      .join(', ');
+    console.warn(`  Stocks with no data: ${noDataSymbols}`);
   }
   
   return results;

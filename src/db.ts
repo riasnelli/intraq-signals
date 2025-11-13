@@ -13,6 +13,11 @@ export type TSignal = {
   riskReward?: string;
   sector?: string;
   details?: Record<string, any>;
+  // AI Recommendations (manual input from ChatGPT, Perplexity, DeepSeek)
+  chatGptRank?: number;      // 1-5 ranking from ChatGPT
+  perplexityRank?: number;   // 1-5 ranking from Perplexity
+  deepSeekRank?: number;     // 1-5 ranking from DeepSeek
+  finalRank?: number;        // Consolidated ranking (1-5) based on all 3 AIs
   backtest?: {
     entryHit: boolean;
     entryHitTime?: string;
@@ -24,6 +29,8 @@ export type TSignal = {
     timeToTarget?: number;
     timeToSL?: number;
     usedRealData?: boolean;
+    noData?: boolean;
+    dataSource?: 'dhan' | 'yfinance';
   };
 };
 

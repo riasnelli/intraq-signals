@@ -1,4 +1,5 @@
 // Dhan API Service for fetching real historical market data
+import { getSecurityId } from '../utils/dhanSecurityIds';
 
 interface DhanCredentials {
   clientId: string;
@@ -50,88 +51,72 @@ export class DhanApiService {
   }
 
   /**
-   * Fetch historical intraday data for a specific symbol and date
+   * Fetch historical intraday data for a specific symbol and date via backend
    * @param symbol - Stock symbol (e.g., "WIPRO", "TCS")
    * @param date - Date in YYYY-MM-DD format
    * @param exchange - Exchange (NSE or BSE), defaults to NSE
+   * @returns Object with data and dataSource
    */
   async fetchIntradayData(
     symbol: string,
     date: string,
     exchange: 'NSE' | 'BSE' = 'NSE'
-  ): Promise<IntradayDataPoint[]> {
+  ): Promise<{ data: IntradayDataPoint[], dataSource?: 'dhan' | 'yfinance' }> {
     const creds = this.getCredentials();
 
     if (!creds) {
       throw new Error('Dhan API credentials not configured');
     }
 
-    // Format dates for Dhan API
-    const fromDate = `${date} 09:15:00`;
-    const toDate = `${date} 15:30:00`;
-
-    console.log(`📡 Fetching historical data for ${symbol} on ${date} from Dhan API...`);
-    const endpoint = `${this.baseUrl}/charts/historical`;
-    console.log(`📋 Request details:`, {
-      endpoint,
-      symbol,
-      exchange,
-      fromDate,
-      toDate
-    });
+    console.log(`📡 Fetching historical data for ${symbol} on ${date} via backend...`);
+    console.log(`📋 Backend URL: ${this.backendUrl}`);
 
     try {
+      const securityId = getSecurityId(symbol);
+      
       const requestBody = {
+        clientId: creds.clientId,
+        accessToken: creds.accessToken,
         symbol: symbol,
-        exchangeSegment: exchange,
-        instrument: 'EQUITY',
-        expiryCode: 0,
-        fromDate: fromDate,
-        toDate: toDate,
-        interval: 5, // 5-minute candles
+        securityId: securityId,
+        exchangeSegment: exchange === 'NSE' ? 'NSE_EQ' : 'BSE_EQ',
+        date: date
       };
       
-      console.log(`📤 Request body:`, JSON.stringify(requestBody, null, 2));
+      if (securityId === "0") {
+        console.warn(`⚠️ No security ID found for ${symbol}, may fail to fetch real data`);
+      }
       
-      const response = await fetch(endpoint, {
+      console.log(`📤 Request to backend:`, requestBody);
+      
+      const response = await fetch(`${this.backendUrl}/api/historical-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'access-token': creds.accessToken,
-          'client-id': creds.clientId,
         },
         body: JSON.stringify(requestBody),
       });
 
-      console.log(`📥 Response status: ${response.status} ${response.statusText}`);
+      console.log(`📥 Backend response status: ${response.status} ${response.statusText}`);
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`❌ Dhan API error (${response.status}):`, errorText);
-        
-        try {
-          const errorJson = JSON.parse(errorText);
-          console.error(`❌ Error details:`, errorJson);
-          throw new Error(`Dhan API error (${response.status}): ${errorJson.message || errorJson.remarks || errorText}`);
-        } catch {
-          throw new Error(`Dhan API error (${response.status}): ${errorText}`);
-        }
-      }
-
       const data = await response.json();
-      console.log(`📦 Response data:`, data);
+      console.log(`📦 Backend response:`, data);
 
-      if (data.status === 'success' && data.data) {
-        const parsedData = this.parseOHLCData(data.data);
-        console.log(`✅ Fetched ${parsedData.length} real data points for ${symbol}`);
-        return parsedData;
+      if (response.ok && data.success && data.data) {
+        const source = data.dataSource || 'unknown';
+        const sourceLabel = source === 'dhan' ? '🟢 Dhan API' : source === 'yfinance' ? '🟡 Yahoo Finance' : 'unknown';
+        console.log(`✅ Fetched ${data.dataPoints} real data points for ${symbol} from ${sourceLabel}`);
+        return {
+          data: data.data,
+          dataSource: source as 'dhan' | 'yfinance'
+        };
       } else {
-        const errorMsg = data.remarks || data.message || 'Failed to fetch data from Dhan';
-        console.error(`❌ Dhan API returned error:`, errorMsg, data);
+        const errorMsg = data.error || 'Failed to fetch data from backend';
+        console.error(`❌ Backend returned error:`, errorMsg);
         throw new Error(errorMsg);
       }
     } catch (error: any) {
-      console.error(`❌ Dhan API fetch error for ${symbol}:`, error.message);
+      console.error(`❌ Backend fetch error for ${symbol}:`, error.message);
       throw error;
     }
   }

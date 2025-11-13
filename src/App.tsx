@@ -19,12 +19,18 @@ export default function App() {
   const [csvFileName, setCsvFileName] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [backtestingBatchId, setBacktestingBatchId] = useState<string | null>(null);
+  const [backtestProgress, setBacktestProgress] = useState<{current: number, total: number} | null>(null);
   const [expandedInsightsBatchId, setExpandedInsightsBatchId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
 
   const loadHistory = async () => {
+    // Preserve current expanded state
+    const currentExpandedIds = new Set(
+      savedSignals.filter(b => b.isExpanded).map(b => b.id)
+    );
+    
     const all = await db.signals.orderBy("date").reverse().toArray();
     // Group by date + strategy + CSV filename (so each upload is separate)
     const grouped = all.reduce((acc: any, signal: any) => {
@@ -37,18 +43,20 @@ export default function App() {
           strategy: signal.strategy,
           csvFileName: csvFile,
           signals: [],
-          isExpanded: false,
+          isExpanded: currentExpandedIds.has(key), // Restore previous expanded state
         };
       }
       acc[key].signals.push(signal);
       return acc;
     }, {});
     const batches = Object.values(grouped);
-    setSavedSignals(batches);
-    // Set first tab as expanded by default
-    if (batches.length > 0) {
+    
+    // If no tabs were previously expanded, expand the first one by default
+    if (currentExpandedIds.size === 0 && batches.length > 0) {
       batches[0].isExpanded = true;
     }
+    
+    setSavedSignals(batches);
   };
 
   const toggleBatch = (batchId: string) => {
@@ -79,7 +87,77 @@ export default function App() {
     alert(`✅ Deleted ${ids.length} signals from ${csvFileName}`);
   };
 
+  // Calculate final rank based on AI rankings (average of rankings, lower is better)
+  const calculateFinalRank = (chatGpt?: number, perplexity?: number, deepSeek?: number): number | undefined => {
+    const rankings = [chatGpt, perplexity, deepSeek].filter(r => r !== undefined) as number[];
+    if (rankings.length === 0) return undefined;
+    
+    // Average ranking
+    const avgRank = rankings.reduce((sum, r) => sum + r, 0) / rankings.length;
+    return Math.round(avgRank * 10) / 10; // Round to 1 decimal
+  };
+
+  // Update AI ranking for a signal
+  const updateAIRank = async (signalId: string, aiSource: 'chatGpt' | 'perplexity' | 'deepSeek', rank?: number) => {
+    const signal = await db.signals.get(signalId);
+    if (!signal) return;
+    
+    // Update the specific AI rank
+    if (aiSource === 'chatGpt') signal.chatGptRank = rank;
+    else if (aiSource === 'perplexity') signal.perplexityRank = rank;
+    else if (aiSource === 'deepSeek') signal.deepSeekRank = rank;
+    
+    // Recalculate final rank
+    signal.finalRank = calculateFinalRank(signal.chatGptRank, signal.perplexityRank, signal.deepSeekRank);
+    
+    await db.signals.put(signal);
+    loadHistory(); // Refresh to show updated rankings
+  };
+
+  // Check if backtest can run (market must be closed)
+  const canRunBacktest = (date: string): { allowed: boolean, message?: string } => {
+    const signalDate = new Date(date + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    signalDate.setHours(0, 0, 0, 0);
+    
+    // Past dates always allowed
+    if (signalDate < today) {
+      return { allowed: true };
+    }
+    
+    // Today - check time
+    if (signalDate.getTime() === today.getTime()) {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const currentTimeMinutes = currentHour * 60 + currentMinute;
+      const dataAvailableTime = 16 * 60; // 4:00 PM = 16:00
+      
+      if (currentTimeMinutes < dataAvailableTime) {
+        return { 
+          allowed: false, 
+          message: `⏰ Backtest only available after 4:00 PM IST\n\nCurrent time: ${now.toLocaleTimeString('en-IN')}\n\nWait until market closes and data becomes available.`
+        };
+      }
+      return { allowed: true };
+    }
+    
+    // Future date
+    return { 
+      allowed: false, 
+      message: `❌ Cannot backtest future date: ${date}`
+    };
+  };
+
   const runBacktest = async (batch: any) => {
+    // Check if backtest is allowed (time-based check)
+    const timeCheck = canRunBacktest(batch.date);
+    if (!timeCheck.allowed) {
+      alert(timeCheck.message);
+      return;
+    }
+    
     // Check if backtest already exists
     const hasBacktest = batch.signals.some((s: any) => s.backtest);
     if (hasBacktest) {
@@ -90,23 +168,36 @@ export default function App() {
     }
 
     setBacktestingBatchId(batch.id);
+    setBacktestProgress({ current: 0, total: batch.signals.length });
+    
     try {
-      const results = await backtestBatch(batch.signals);
+      // Pass progress callback to backtestBatch
+      const results = await backtestBatch(
+        batch.signals,
+        (current, total) => setBacktestProgress({ current, total })
+      );
+      
       await loadHistory(); // Reload to get updated data
       
-      // Check how many used real data
-      const realDataCount = results.filter(r => r.backtest?.usedRealData).length;
+      // Check data sources
+      const dhanCount = results.filter(r => r.backtest?.dataSource === 'dhan').length;
+      const yfinanceCount = results.filter(r => r.backtest?.dataSource === 'yfinance').length;
+      const noDataCount = results.filter(r => r.backtest?.noData).length;
       const totalCount = results.length;
       
       let message = `✅ Backtest completed for ${totalCount} signals!\n\n`;
       
-      if (realDataCount === totalCount) {
-        message += `✅ Using REAL historical data from Dhan API\nResults are based on actual market data.`;
-      } else if (realDataCount > 0) {
-        message += `📊 Mixed data sources:\n• Real data: ${realDataCount} stocks\n• Mock data: ${totalCount - realDataCount} stocks (API fetch failed)\n\nCheck console for details.`;
-      } else {
-        message += `⚠️ Using MOCK/SIMULATED data\nDhan API may not be configured or data fetch failed.\n\nConfigure Dhan API credentials in Settings for real data.`;
+      if (dhanCount > 0) {
+        message += `🟢 Dhan API: ${dhanCount} stocks\n`;
       }
+      if (yfinanceCount > 0) {
+        message += `🟡 Yahoo Finance: ${yfinanceCount} stocks (darker rows)\n`;
+      }
+      if (noDataCount > 0) {
+        message += `⚪ No data: ${noDataCount} stocks (blank rows)\n`;
+      }
+      
+      message += `\n📊 ${dhanCount + yfinanceCount} stocks backtested successfully!`;
       
       alert(message);
     } catch (error) {
@@ -114,6 +205,7 @@ export default function App() {
       alert('❌ Backtest failed. Check console for details.');
     } finally {
       setBacktestingBatchId(null);
+      setBacktestProgress(null);
     }
   };
 
@@ -399,53 +491,42 @@ export default function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => runBacktest(batch)}
-                          disabled={backtestingBatchId === batch.id}
-                          className={`${
-                            batch.signals.some((s: any) => s.backtest)
-                              ? 'bg-green-600 hover:bg-green-700'
-                              : 'bg-purple-600 hover:bg-purple-700'
-                          } disabled:bg-purple-800 disabled:opacity-50 text-white px-3 py-1 rounded text-sm`}
-                        >
-                          {backtestingBatchId === batch.id 
-                            ? '⏳ Running...' 
-                            : batch.signals.some((s: any) => s.backtest)
-                            ? '✅ Backtested'
-                            : '🎯 Backtest'}
-                        </button>
-                        {batch.signals.some((s: any) => s.backtest) && (
-                          <button
-                            onClick={() => setExpandedInsightsBatchId(
-                              expandedInsightsBatchId === batch.id ? null : batch.id
-                            )}
-                            className={`${
-                              expandedInsightsBatchId === batch.id
-                                ? 'bg-indigo-700'
-                                : 'bg-indigo-600 hover:bg-indigo-700'
-                            } text-white px-3 py-1 rounded text-sm transition-colors`}
-                          >
-                            {expandedInsightsBatchId === batch.id ? '📊 Hide Insights' : '📊 Insights'}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => downloadCSV(batch)}
-                          className="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1 rounded text-sm"
-                        >
-                          📥 CSV
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete ${batch.signals.length} signals from ${batch.date}?`)) {
-                              deleteBatch(batch.id);
-                            }
-                          }}
-                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
-                        >
-                          🗑️ Delete
-                        </button>
-                      </div>
+                      
+                      {/* Backtest Stats - Visible even when collapsed */}
+                      {batch.signals.some((s: any) => s.backtest) && (
+                        <div className="flex items-center gap-6 mr-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-col items-center">
+                            <div className="text-lg font-bold text-emerald-400">
+                              {batch.signals.filter((s: any) => s.backtest?.entryHit).length} / {batch.signals.filter((s: any) => s.backtest && !s.backtest.noData).length}
+                            </div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wide">Entry Hit</div>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <div className="text-lg font-bold text-emerald-400">
+                              {batch.signals.filter((s: any) => s.backtest?.targetHit).length} / {batch.signals.filter((s: any) => s.backtest && !s.backtest.noData).length}
+                            </div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wide">Target Hit</div>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <div className={`text-lg font-bold ${
+                              (() => {
+                                const backtested = batch.signals.filter((s: any) => s.backtest && !s.backtest.noData && s.backtest.outcome !== 'no_trigger');
+                                const wins = batch.signals.filter((s: any) => s.backtest && !s.backtest.noData && s.backtest.outcome === 'target');
+                                const winRate = backtested.length > 0 ? (wins.length / backtested.length * 100) : 0;
+                                return winRate >= 50 ? 'text-emerald-400' : winRate >= 30 ? 'text-yellow-400' : 'text-red-400';
+                              })()
+                            }`}>
+                              {(() => {
+                                const backtested = batch.signals.filter((s: any) => s.backtest && !s.backtest.noData && s.backtest.outcome !== 'no_trigger');
+                                const wins = batch.signals.filter((s: any) => s.backtest && !s.backtest.noData && s.backtest.outcome === 'target');
+                                const winRate = backtested.length > 0 ? (wins.length / backtested.length * 100).toFixed(1) : '0.0';
+                                return `${winRate}%`;
+                              })()}
+                            </div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wide">Win Rate</div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Insights Panel - Slide in from right */}
@@ -463,144 +544,289 @@ export default function App() {
                     {/* Expanded Signals Table */}
                     {batch.isExpanded && (
                       <div className="border-t border-slate-800 p-4 space-y-4">
+                        {/* Action Buttons - Only visible when expanded */}
+                        <div className="flex items-center gap-2 pb-2 border-b border-slate-800/50">
+                          {(() => {
+                            const timeCheck = canRunBacktest(batch.date);
+                            const isDisabled = !timeCheck.allowed || backtestingBatchId === batch.id;
+                            
+                            return (
+                              <button
+                                onClick={() => runBacktest(batch)}
+                                disabled={isDisabled}
+                                className={`${
+                                  !timeCheck.allowed
+                                    ? 'bg-slate-700/20 border-slate-600/50 text-slate-500'
+                                    : batch.signals.some((s: any) => s.backtest)
+                                    ? 'bg-green-600/20 border-green-600/50 text-green-400 hover:bg-green-600/30'
+                                    : 'bg-purple-600/20 border-purple-600/50 text-purple-400 hover:bg-purple-600/30'
+                                } disabled:opacity-50 disabled:cursor-not-allowed border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                                title={
+                                  !timeCheck.allowed 
+                                    ? 'Backtest available after 4:00 PM IST' 
+                                    : batch.signals.some((s: any) => s.backtest) 
+                                    ? 'Backtest completed' 
+                                    : 'Run backtest'
+                                }
+                              >
+                                {!timeCheck.allowed ? (
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Backtest (After 4 PM)
+                                  </>
+                                ) : backtestingBatchId === batch.id ? (
+                                  <>
+                                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    {backtestProgress ? `Processing ${backtestProgress.current}/${backtestProgress.total}...` : 'Running...'}
+                                  </>
+                                ) : batch.signals.some((s: any) => s.backtest) ? (
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Backtested
+                                  </>
+                                ) : (
+                                  <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                </svg>
+                                Backtest
+                              </>
+                                )}
+                              </button>
+                            );
+                          })()}
+                          
+                          {batch.signals.some((s: any) => s.backtest) && (
+                            <button
+                              onClick={() => setExpandedInsightsBatchId(
+                                expandedInsightsBatchId === batch.id ? null : batch.id
+                              )}
+                              className={`${
+                                expandedInsightsBatchId === batch.id
+                                  ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300'
+                                  : 'bg-slate-700/50 border-slate-600 text-slate-300 hover:bg-indigo-600/20 hover:border-indigo-600/50'
+                              } border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                              title="View insights dashboard"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                              </svg>
+                              {expandedInsightsBatchId === batch.id ? 'Hide Insights' : 'Insights'}
+                            </button>
+                          )}
+                          
+                        <button
+                          onClick={() => downloadCSV(batch)}
+                            className="bg-slate-700/50 border border-slate-600 text-slate-300 hover:bg-sky-600/20 hover:border-sky-600/50 px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors"
+                            title="Download as CSV"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            CSV
+                        </button>
+                          
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete ${batch.signals.length} signals from ${batch.date}?`)) {
+                              deleteBatch(batch.id);
+                            }
+                          }}
+                            className="bg-slate-700/50 border border-slate-600 text-slate-300 hover:bg-red-600/20 hover:border-red-600/50 hover:text-red-400 px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors"
+                            title="Delete this batch"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            Delete
+                        </button>
+                        </div>
+                        
                         {/* Statistics - Show if backtest data exists */}
                         {batch.signals.some((s: any) => s.backtest) && (
                           <>
                             {/* Data Source Indicator */}
                             {(() => {
-                              const hasRealData = batch.signals.some((s: any) => s.backtest?.usedRealData);
-                              const realDataCount = batch.signals.filter((s: any) => s.backtest?.usedRealData).length;
-                              const totalBacktested = batch.signals.filter((s: any) => s.backtest).length;
+                              const dhanCount = batch.signals.filter((s: any) => s.backtest?.dataSource === 'dhan').length;
+                              const yfinanceCount = batch.signals.filter((s: any) => s.backtest?.dataSource === 'yfinance').length;
+                              const noDataCount = batch.signals.filter((s: any) => s.backtest?.noData).length;
+                              const totalCount = batch.signals.filter((s: any) => s.backtest).length;
                               
-                              if (hasRealData && realDataCount === totalBacktested) {
-                                // All real data
-                                return (
-                                  <div className="bg-green-900/20 border border-green-700/50 rounded p-3 flex items-start gap-3">
-                                    <svg className="w-5 h-5 text-green-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    <div className="flex-1">
-                                      <div className="text-green-300 text-sm font-medium mb-1">✅ Using Real Historical Data</div>
-                                      <div className="text-green-200/70 text-xs">
-                                        Results based on actual market data from Dhan API ({realDataCount}/{totalBacktested} stocks)
-                                      </div>
-                                    </div>
+                              if (totalCount === 0) return null;
+                              
+                              return (
+                                <div className="bg-slate-900/40 border border-slate-700/50 rounded px-3 py-2 flex items-center gap-4 text-xs">
+                                  <svg className="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                  </svg>
+                                  <div className="flex items-center gap-4 text-slate-400">
+                                    {dhanCount > 0 && (
+                                      <span className="flex items-center gap-1">
+                                        <svg className="w-3 h-3 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                                          <circle cx="10" cy="10" r="8"/>
+                                        </svg>
+                                        Dhan: {dhanCount}
+                                      </span>
+                                    )}
+                                    {yfinanceCount > 0 && (
+                                      <span className="flex items-center gap-1">
+                                        <svg className="w-3 h-3 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                                          <circle cx="10" cy="10" r="8"/>
+                                        </svg>
+                                        Yahoo: {yfinanceCount}
+                                      </span>
+                                    )}
+                                    {noDataCount > 0 && (
+                                      <span className="flex items-center gap-1">
+                                        <svg className="w-3 h-3 text-slate-600" fill="currentColor" viewBox="0 0 20 20">
+                                          <circle cx="10" cy="10" r="8"/>
+                                        </svg>
+                                        No data: {noDataCount}
+                                      </span>
+                                    )}
                                   </div>
-                                );
-                              } else if (hasRealData) {
-                                // Mixed data
-                                return (
-                                  <div className="bg-blue-900/20 border border-blue-700/50 rounded p-3 flex items-start gap-3">
-                                    <svg className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    <div className="flex-1">
-                                      <div className="text-blue-300 text-sm font-medium mb-1">📊 Mixed Data Sources</div>
-                                      <div className="text-blue-200/70 text-xs">
-                                        Real data: {realDataCount} stocks | Mock data: {totalBacktested - realDataCount} stocks (API fetch failed)
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              } else {
-                                // All mock data
-                                return (
-                                  <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 flex items-start gap-3">
-                                    <svg className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                    </svg>
-                                    <div className="flex-1">
-                                      <div className="text-yellow-300 text-sm font-medium mb-1">⚠️ Using Simulated Data</div>
-                                      <div className="text-yellow-200/70 text-xs">
-                                        Results based on mock data. Configure Dhan API in Settings for real historical market data.
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              }
+                                </div>
+                              );
                             })()}
-                            <div className="bg-slate-800 rounded p-4 flex gap-6">
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-400 text-sm">Entry Hit:</span>
-                                <span className="text-lg font-semibold text-emerald-400">
-                                  {batch.signals.filter((s: any) => s.backtest?.entryHit).length} / {batch.signals.length}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-400 text-sm">Target Hit:</span>
-                                <span className="text-lg font-semibold text-green-400">
-                                  {batch.signals.filter((s: any) => s.backtest?.targetHit).length} / {batch.signals.length}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-400 text-sm">Win Rate:</span>
-                                <span className="text-lg font-semibold text-yellow-400">
-                                  {batch.signals.filter((s: any) => s.backtest?.entryHit).length > 0
-                                    ? ((batch.signals.filter((s: any) => s.backtest?.targetHit).length / 
-                                        batch.signals.filter((s: any) => s.backtest?.entryHit).length) * 100).toFixed(1)
-                                    : '0'}%
-                                </span>
-                              </div>
-                            </div>
                           </>
                         )}
 
-                        <table className="w-full text-sm">
-                          <thead className="text-slate-300">
-                            <tr>
-                              <th className="text-left p-2">#</th>
-                              <th className="text-left p-2">Symbol</th>
-                              <th className="text-left p-2">Side</th>
-                              <th className="text-right p-2">Entry ₹</th>
-                              <th className="text-right p-2">Target ₹</th>
-                              <th className="text-right p-2">Stop Loss ₹</th>
-                              <th className="text-center p-2">R:R</th>
-                              <th className="text-right p-2">Score</th>
-                              {batch.signals.some((s: any) => s.backtest) && (
-                                <>
-                                  <th className="text-center p-2">Hit</th>
-                                  <th className="text-center p-2">Target</th>
-                                  <th className="text-center p-2">SL</th>
-                                </>
-                              )}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {batch.signals.map((s: any, i: number) => (
-                              <tr key={s.id} className="border-t border-slate-800 hover:bg-slate-800">
-                                <td className="p-2 text-slate-400">{i+1}</td>
-                                <td className="p-2 font-semibold text-sky-300">{s.symbol}</td>
-                                <td className="p-2">
-                                  <span className={`px-2 py-1 rounded text-xs ${s.side === 'LONG' ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
-                                    {s.side}
-                                  </span>
-                                </td>
-                                <td className="p-2 text-right font-mono">{s.entry?.toFixed(2) ?? '-'}</td>
-                                <td className="p-2 text-right font-mono text-emerald-400">{s.target?.toFixed(2) ?? '-'}</td>
-                                <td className="p-2 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
-                                <td className="p-2 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
-                                <td className="p-2 text-right text-slate-400">{s.score?.toFixed(2) ?? '-'}</td>
-                                {batch.signals.some((sig: any) => sig.backtest) && (
+                        <div className="w-[95vw] overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="text-slate-300">
+                              <tr>
+                                <th className="text-left p-2">#</th>
+                                <th className="text-left p-2">Symbol</th>
+                                <th className="text-left p-2">Side</th>
+                                <th className="text-right p-2">Entry ₹</th>
+                                <th className="text-right p-2">Target ₹</th>
+                                <th className="text-right p-2">Stop Loss ₹</th>
+                                <th className="text-center p-2">R:R</th>
+                                <th className="text-right p-2">Score</th>
+                                {/* AI Rankings */}
+                                <th className="text-center p-2 text-xs text-blue-400">GPT</th>
+                                <th className="text-center p-2 text-xs text-purple-400">Perp</th>
+                                <th className="text-center p-2 text-xs text-green-400">Deep</th>
+                                <th className="text-center p-2 text-xs text-yellow-400">Final</th>
+                                {batch.signals.some((s: any) => s.backtest) && (
                                   <>
-                                    <td className={`p-2 text-center text-xs font-medium ${
-                                      s.backtest?.entryHit ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-400'
-                                    }`}>
-                                      {s.backtest?.entryHit ? s.backtest.entryHitTime : '✗'}
-                                    </td>
-                                    <td className={`p-2 text-center text-xs font-medium ${
-                                      s.backtest?.targetHit ? 'bg-green-900/30 text-green-300' : 'text-slate-500'
-                                    }`}>
-                                      {s.backtest?.targetHit ? s.backtest.targetHitTime : '-'}
-                                    </td>
-                                    <td className={`p-2 text-center text-xs font-medium ${
-                                      s.backtest?.slHit ? 'bg-red-900/30 text-red-400' : 'text-slate-500'
-                                    }`}>
-                                      {s.backtest?.slHit ? s.backtest.slHitTime : '-'}
-                                    </td>
+                                    <th className="text-center p-2">Hit</th>
+                                    <th className="text-center p-2">Target</th>
+                                    <th className="text-center p-2">SL</th>
                                   </>
                                 )}
                               </tr>
-                            ))}
+                            </thead>
+                          <tbody>
+                            {[...batch.signals]
+                              .sort((a: any, b: any) => (b.score || 0) - (a.score || 0)) // Sort by score descending
+                              .map((s: any, i: number) => {
+                              // Determine row background based on data source and final rank
+                              const isYFinance = s.backtest?.dataSource === 'yfinance';
+                              const hasNoData = s.backtest?.noData;
+                              const isTopRanked = s.finalRank && s.finalRank <= 5;
+                              
+                              let rowBgClass = '';
+                              if (isTopRanked) {
+                                rowBgClass = 'bg-yellow-900/10 border-l-2 border-yellow-500/50'; // Highlight top 5
+                              } else if (isYFinance) {
+                                rowBgClass = 'bg-slate-900/60'; // Darker for yfinance
+                              } else if (hasNoData) {
+                                rowBgClass = 'bg-slate-950/40 opacity-50'; // Very dim for no data
+                              }
+                              
+                              return (
+                                <tr key={s.id} className={`border-t border-slate-800 hover:bg-slate-800 ${rowBgClass}`}>
+                                  <td className="p-2 text-slate-400">{i+1}</td>
+                                  <td className="p-2 font-semibold text-sky-300">
+                                    {s.symbol}
+                                    {isYFinance && <span className="ml-1 text-[10px] text-yellow-500" title="Data from Yahoo Finance">ⓨ</span>}
+                                    {isTopRanked && <span className="ml-1 text-[10px] text-yellow-400" title="AI Top 5">⭐</span>}
+                                  </td>
+                                  <td className="p-2">
+                                    <span className={`px-2 py-1 rounded text-xs ${s.side === 'LONG' ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
+                                      {s.side}
+                                    </span>
+                                  </td>
+                                  <td className="p-2 text-right font-mono">{s.entry?.toFixed(2) ?? '-'}</td>
+                                  <td className="p-2 text-right font-mono text-emerald-400">{s.target?.toFixed(2) ?? '-'}</td>
+                                  <td className="p-2 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
+                                  <td className="p-2 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
+                                  <td className="p-2 text-right text-slate-400 font-semibold">{s.score?.toFixed(2) ?? '-'}</td>
+                                  {/* AI Rankings - Editable */}
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={s.chatGptRank || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'chatGpt', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className="w-10 bg-slate-800 text-blue-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-blue-500 focus:outline-none"
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={s.perplexityRank || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'perplexity', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className="w-10 bg-slate-800 text-purple-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-purple-500 focus:outline-none"
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={s.deepSeekRank || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'deepSeek', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className="w-10 bg-slate-800 text-green-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-green-500 focus:outline-none"
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="p-2 text-center">
+                                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                      s.finalRank === 1 ? 'bg-yellow-900/50 text-yellow-300 border border-yellow-500' :
+                                      s.finalRank && s.finalRank <= 5 ? 'bg-yellow-900/20 text-yellow-400' :
+                                      'text-slate-600'
+                                    }`}>
+                                      {s.finalRank || '-'}
+                                    </span>
+                                  </td>
+                                  {batch.signals.some((sig: any) => sig.backtest) && (
+                                    <>
+                                      <td className={`p-2 text-center text-xs font-medium ${
+                                        hasNoData ? 'text-slate-700' :
+                                        s.backtest?.entryHit ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-400'
+                                      }`}>
+                                        {hasNoData ? '' : s.backtest?.entryHit ? s.backtest.entryHitTime : '✗'}
+                                      </td>
+                                      <td className={`p-2 text-center text-xs font-medium ${
+                                        hasNoData ? 'text-slate-700' :
+                                        s.backtest?.targetHit ? 'bg-green-900/30 text-green-300' : 'text-slate-500'
+                                      }`}>
+                                        {hasNoData ? '' : s.backtest?.targetHit ? s.backtest.targetHitTime : '-'}
+                                      </td>
+                                      <td className={`p-2 text-center text-xs font-medium ${
+                                        hasNoData ? 'text-slate-700' :
+                                        s.backtest?.slHit ? 'bg-red-900/30 text-red-400' : 'text-slate-500'
+                                      }`}>
+                                        {hasNoData ? '' : s.backtest?.slHit ? s.backtest.slHitTime : '-'}
+                                      </td>
+                                    </>
+                                  )}
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
