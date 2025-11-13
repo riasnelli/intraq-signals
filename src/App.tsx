@@ -92,14 +92,14 @@ export default function App() {
     alert(`✅ Deleted ${ids.length} signals from ${csvFileName}`);
   };
 
-  // Calculate final rank based on AI rankings (average of rankings, lower is better)
-  const calculateFinalRank = (chatGpt?: number, perplexity?: number, deepSeek?: number): number | undefined => {
+  // Calculate average score for sorting (lower is better)
+  const calculateAverageScore = (chatGpt?: number, perplexity?: number, deepSeek?: number): number | undefined => {
     const rankings = [chatGpt, perplexity, deepSeek].filter(r => r !== undefined) as number[];
     if (rankings.length === 0) return undefined;
     
-    // Average ranking
+    // Average ranking (used for sorting, not display)
     const avgRank = rankings.reduce((sum, r) => sum + r, 0) / rankings.length;
-    return Math.round(avgRank * 10) / 10; // Round to 1 decimal
+    return avgRank;
   };
 
   // Update AI ranking locally (doesn't save to DB yet)
@@ -132,8 +132,8 @@ export default function App() {
       if (rankings.perplexity !== undefined) signal.perplexityRank = rankings.perplexity;
       if (rankings.deepSeek !== undefined) signal.deepSeekRank = rankings.deepSeek;
       
-      // Recalculate final rank
-      signal.finalRank = calculateFinalRank(signal.chatGptRank, signal.perplexityRank, signal.deepSeekRank);
+      // Calculate average score for sorting (stored but not displayed directly)
+      signal.finalRank = calculateAverageScore(signal.chatGptRank, signal.perplexityRank, signal.deepSeekRank);
       
       updates.push(signal);
     }
@@ -915,13 +915,35 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {[...batch.signals]
-                              .sort((a: any, b: any) => (b.score || 0) - (a.score || 0)) // Sort by score descending
-                              .map((s: any, i: number) => {
-                              // Determine row background based on data source and final rank
-                              const isYFinance = s.backtest?.dataSource === 'yfinance';
-                              const hasNoData = s.backtest?.noData;
-                              const isTopRanked = s.finalRank && s.finalRank <= 5;
+                            {(() => {
+                              // First, calculate ordinal ranks based on AI consensus
+                              const signalsWithAvg = batch.signals.map((s: any) => ({
+                                ...s,
+                                avgScore: calculateAverageScore(s.chatGptRank, s.perplexityRank, s.deepSeekRank)
+                              }));
+                              
+                              // Sort by average score (lower = better) to assign ordinal ranks
+                              const rankedByAI = [...signalsWithAvg]
+                                .filter((s: any) => s.avgScore !== undefined)
+                                .sort((a: any, b: any) => (a.avgScore || 999) - (b.avgScore || 999));
+                              
+                              // Assign ordinal ranks (1, 2, 3, 4, 5...)
+                              const rankMap = new Map<string, number>();
+                              rankedByAI.forEach((s: any, idx: number) => {
+                                rankMap.set(s.id, idx + 1); // 1-based ranking
+                              });
+                              
+                              // Now display sorted by Score (not AI ranking)
+                              return [...signalsWithAvg]
+                                .sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
+                                .map((s: any, i: number) => {
+                                  // Get ordinal rank for this signal
+                                  const ordinalRank = rankMap.get(s.id);
+                                  
+                                  // Determine row background based on data source and final rank
+                                  const isYFinance = s.backtest?.dataSource === 'yfinance';
+                                  const hasNoData = s.backtest?.noData;
+                                  const isTopRanked = ordinalRank && ordinalRank <= 5;
                               
                               let rowBgClass = '';
                               if (isTopRanked) {
@@ -1075,16 +1097,16 @@ export default function App() {
                                   </td>
                                   <td className="px-2 py-1 text-center">
                                     <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                      s.finalRank === 1 ? 'bg-yellow-900/50 text-yellow-300 border border-yellow-500' :
-                                      s.finalRank && s.finalRank <= 5 ? 'bg-yellow-900/20 text-yellow-400' :
+                                      ordinalRank === 1 ? 'bg-yellow-900/50 text-yellow-300 border border-yellow-500' :
+                                      ordinalRank && ordinalRank <= 5 ? 'bg-yellow-900/20 text-yellow-400' :
                                       'text-slate-600'
                                     }`}>
-                                      {s.finalRank || '-'}
+                                      {ordinalRank || '-'}
                                     </span>
                                   </td>
                               </tr>
                               );
-                            })}
+                            })})()}
                           </tbody>
                         </table>
                       </div>
