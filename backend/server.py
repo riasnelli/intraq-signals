@@ -179,65 +179,78 @@ def get_historical_data():
         
         print(f"DEBUG: Extracted params - symbol: {symbol}, securityId: {security_id}, date: {date_param}")
         
-        if not all([client_id, access_token, symbol, security_id, date_param]):
+        # Symbol and date are always required
+        if not symbol or not date_param:
             return jsonify({
                 'success': False,
-                'error': 'Missing required fields'
+                'error': 'Missing required fields: symbol and date'
             }), 400
         
-        # Get or create Dhan client
-        if client_id not in dhan_clients:
-            dhan = dhanhq(client_id, access_token)
-            dhan_clients[client_id] = dhan
-        else:
-            dhan = dhan_clients[client_id]
+        # Check if Dhan credentials are provided
+        has_dhan_creds = client_id and access_token and client_id.strip() and access_token.strip()
         
-        # Convert date to required format for intraday minute data
-        from_date = f"{date_param} 09:15:00"
-        to_date = f"{date_param} 15:30:00"
-        
-        print(f"DEBUG: Calling Dhan API for {symbol} (intraday minute data)")
-        print(f"DEBUG: Date range: {from_date} to {to_date}")
-        print(f"DEBUG: Security ID: {security_id}")
-        
-        # Fetch intraday minute data
-        historical_data = dhan.intraday_minute_data(
-            security_id=security_id,
-            exchange_segment=exchange_segment,
-            instrument_type="EQUITY",
-            from_date=from_date,
-            to_date=to_date
-        )
-        
-        print(f"DEBUG: Dhan API response type: {type(historical_data)}")
-        print(f"DEBUG: Dhan API response: {historical_data}")
-        
-        # Check if response is valid
+        # Try Dhan API first if credentials are provided
         dhan_failed = False
         dhan_error_msg = None
         
-        if not historical_data:
+        if has_dhan_creds:
+            print(f"🔑 Dhan credentials provided, trying Dhan API first...")
+            
+            # Get or create Dhan client
+            if client_id not in dhan_clients:
+                dhan = dhanhq(client_id, access_token)
+                dhan_clients[client_id] = dhan
+            else:
+                dhan = dhan_clients[client_id]
+            
+            # Convert date to required format for intraday minute data
+            from_date = f"{date_param} 09:15:00"
+            to_date = f"{date_param} 15:30:00"
+            
+            print(f"DEBUG: Calling Dhan API for {symbol} (intraday minute data)")
+            print(f"DEBUG: Date range: {from_date} to {to_date}")
+            print(f"DEBUG: Security ID: {security_id}")
+            
+            # Fetch intraday minute data
+            historical_data = dhan.intraday_minute_data(
+                security_id=security_id,
+                exchange_segment=exchange_segment,
+                instrument_type="EQUITY",
+                from_date=from_date,
+                to_date=to_date
+            )
+            
+            print(f"DEBUG: Dhan API response type: {type(historical_data)}")
+            print(f"DEBUG: Dhan API response: {historical_data}")
+            
+            # Check if response is valid
+            if not historical_data:
+                dhan_failed = True
+                dhan_error_msg = 'No data received from Dhan API'
+            elif isinstance(historical_data, str):
+                dhan_failed = True
+                dhan_error_msg = f'Dhan API error: {historical_data}'
+            elif not isinstance(historical_data, dict):
+                dhan_failed = True
+                dhan_error_msg = f'Invalid response type from Dhan API: {type(historical_data)}'
+            elif historical_data.get('status') == 'failure':
+                # Dhan API returned explicit failure status
+                dhan_failed = True
+                error_info = historical_data.get('remarks', {})
+                dhan_error_msg = f"Dhan API error: {error_info.get('error_code', 'Unknown')} - {error_info.get('error_message', 'No details')}"
+            elif 'data' not in historical_data:
+                dhan_failed = True
+                dhan_error_msg = f'No data field in Dhan API response'
+            elif isinstance(historical_data.get('data'), dict) and len(historical_data['data'].get('timestamp', [])) == 0:
+                dhan_failed = True
+                dhan_error_msg = 'Dhan API returned 0 data points'
+        else:
+            # No Dhan credentials, skip directly to Yahoo Finance
+            print(f"⚠️ No Dhan credentials provided, using Yahoo Finance fallback only")
             dhan_failed = True
-            dhan_error_msg = 'No data received from Dhan API'
-        elif isinstance(historical_data, str):
-            dhan_failed = True
-            dhan_error_msg = f'Dhan API error: {historical_data}'
-        elif not isinstance(historical_data, dict):
-            dhan_failed = True
-            dhan_error_msg = f'Invalid response type from Dhan API: {type(historical_data)}'
-        elif historical_data.get('status') == 'failure':
-            # Dhan API returned explicit failure status
-            dhan_failed = True
-            error_info = historical_data.get('remarks', {})
-            dhan_error_msg = f"Dhan API error: {error_info.get('error_code', 'Unknown')} - {error_info.get('error_message', 'No details')}"
-        elif 'data' not in historical_data:
-            dhan_failed = True
-            dhan_error_msg = f'No data field in Dhan API response'
-        elif isinstance(historical_data.get('data'), dict) and len(historical_data['data'].get('timestamp', [])) == 0:
-            dhan_failed = True
-            dhan_error_msg = 'Dhan API returned 0 data points'
+            dhan_error_msg = 'No Dhan credentials provided'
         
-        # Try yfinance fallback if Dhan failed
+        # Try yfinance fallback if Dhan failed or not available
         if dhan_failed:
             print(f"⚠️ Dhan API failed: {dhan_error_msg}")
             print(f"🔄 Trying yfinance fallback...")
