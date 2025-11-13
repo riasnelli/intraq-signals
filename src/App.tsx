@@ -6,6 +6,7 @@ import { STRATEGIES, StrategyName, Row } from "./strategies";
 import { toNum } from "./utils";
 import Settings from "./components/Settings";
 import Insights from "./components/Insights";
+import TomorrowPicks from "./components/TomorrowPicks";
 import { backtestBatch } from "./backtest";
 import { enrichSignalRow, BaseSignalRow, IndicatorContext } from "./signalMetrics";
 import { generateMockCandles, generateNiftyCandles } from "./mockCandleData";
@@ -24,6 +25,7 @@ export default function App() {
   const [backtestingBatchId, setBacktestingBatchId] = useState<string | null>(null);
   const [backtestProgress, setBacktestProgress] = useState<{current: number, total: number} | null>(null);
   const [expandedInsightsBatchId, setExpandedInsightsBatchId] = useState<string | null>(null);
+  const [expandedTomorrowPicksBatchId, setExpandedTomorrowPicksBatchId] = useState<string | null>(null);
   const [pendingRankings, setPendingRankings] = useState<Map<string, {chatGpt?: number, perplexity?: number, deepSeek?: number}>>(new Map());
   const [showIndicators, setShowIndicators] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -714,6 +716,18 @@ export default function App() {
                       )}
                     </div>
 
+                    {/* Tomorrow's Picks Panel - Slide in from top */}
+                    {batch.isExpanded && expandedTomorrowPicksBatchId === batch.id && batch.signals.some((s: any) => s.backtest) && (
+                      <div className="border-t border-slate-800 overflow-hidden">
+                        <div className="animate-slideInBottom">
+                          <TomorrowPicks 
+                            signals={batch.signals}
+                            onClose={() => setExpandedTomorrowPicksBatchId(null)}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {/* Insights Panel - Slide in from right */}
                     {batch.isExpanded && expandedInsightsBatchId === batch.id && batch.signals.some((s: any) => s.backtest) && (
                       <div className="border-t border-slate-800 overflow-hidden">
@@ -734,22 +748,41 @@ export default function App() {
                           {/* Left Side Buttons */}
                           <div className="flex items-center gap-2">
                           {batch.signals.some((s: any) => s.backtest) && (
-                            <button
-                              onClick={() => setExpandedInsightsBatchId(
-                                expandedInsightsBatchId === batch.id ? null : batch.id
-                              )}
-                              className={`${
-                                expandedInsightsBatchId === batch.id
-                                  ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300'
-                                  : 'bg-slate-700/50 border-slate-600 text-slate-300 hover:bg-indigo-600/20 hover:border-indigo-600/50'
-                              } border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
-                              title="View insights dashboard"
-                            >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                              </svg>
-                              {expandedInsightsBatchId === batch.id ? 'Hide Insights' : 'Insights'}
-                            </button>
+                            <>
+                              <button
+                                onClick={() => setExpandedTomorrowPicksBatchId(
+                                  expandedTomorrowPicksBatchId === batch.id ? null : batch.id
+                                )}
+                                className={`${
+                                  expandedTomorrowPicksBatchId === batch.id
+                                    ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300'
+                                    : 'bg-slate-700/50 border-slate-600 text-slate-300 hover:bg-indigo-600/20 hover:border-indigo-600/50'
+                                } border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                                title="Tomorrow's trading strategy based on today's results"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                </svg>
+                                {expandedTomorrowPicksBatchId === batch.id ? 'Hide Picks' : "Tomorrow's Picks"}
+                              </button>
+                              
+                              <button
+                                onClick={() => setExpandedInsightsBatchId(
+                                  expandedInsightsBatchId === batch.id ? null : batch.id
+                                )}
+                                className={`${
+                                  expandedInsightsBatchId === batch.id
+                                    ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300'
+                                    : 'bg-slate-700/50 border-slate-600 text-slate-300 hover:bg-indigo-600/20 hover:border-indigo-600/50'
+                                } border px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors`}
+                                title="View detailed insights dashboard"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                </svg>
+                                {expandedInsightsBatchId === batch.id ? 'Hide Analytics' : 'Analytics'}
+                              </button>
+                            </>
                           )}
                           
                         <button
