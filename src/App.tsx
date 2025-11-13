@@ -1023,17 +1023,23 @@ export default function App() {
                                         </span>
                                       </td>
                                       <td className="px-2 py-1 text-center text-xs">
-                                        <span className={`px-1 py-0.5 rounded text-[10px] ${
-                                          s.trendStatus === 'Strong Uptrend' ? 'bg-emerald-900/40 text-emerald-300' :
-                                          s.trendStatus === 'Weak Uptrend' ? 'bg-emerald-900/20 text-emerald-400' :
-                                          s.trendStatus === 'Downtrend' ? 'bg-red-900/40 text-red-300' :
-                                          'bg-slate-800 text-slate-400'
-                                        }`}>
-                                          {s.trendStatus === 'Strong Uptrend' ? '⬆⬆' :
-                                           s.trendStatus === 'Weak Uptrend' ? '⬆' :
-                                           s.trendStatus === 'Downtrend' ? '⬇' :
-                                           '↔'}
-                                        </span>
+                                        {s.trendStatus === 'Strong Uptrend' ? (
+                                          <svg className="w-4 h-4 mx-auto text-emerald-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                          </svg>
+                                        ) : s.trendStatus === 'Weak Uptrend' ? (
+                                          <svg className="w-4 h-4 mx-auto text-emerald-400 opacity-60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                          </svg>
+                                        ) : s.trendStatus === 'Downtrend' ? (
+                                          <svg className="w-4 h-4 mx-auto text-red-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                                          </svg>
+                                        ) : (
+                                          <svg className="w-4 h-4 mx-auto text-slate-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
+                                          </svg>
+                                        )}
                                       </td>
                                       <td className="px-2 py-1 text-right text-xs text-cyan-300">{s.relativeStrength20D?.toFixed(2) ?? '-'}</td>
                                       <td className={`px-2 py-1 text-right text-xs ${
