@@ -21,7 +21,7 @@ export type Signal = {
 };
 
 const near52High = (r: Row) =>
-  r.nm_52w_h ? (r.iep / r.nm_52w_h - 1) * 100 : -999;
+  r.nm_52w_h ? (r.iep / r.nm_52w_h - 1) * 100 : -50; // -50% = assume far from 52W high if missing
 
 export function momentumGapLong(rows: Row[]): Signal[] {
   return rows
