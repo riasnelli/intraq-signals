@@ -205,14 +205,14 @@ export default function App() {
     const signalsWithoutBacktest = batch.signals.filter((s: any) => !s.backtest);
     const signalsWithBacktest = batch.signals.filter((s: any) => s.backtest);
     
-    // If some signals already have backtest data, offer to backtest only missing ones
+    // PRIORITY 1: If partial data exists, offer to fill missing data FIRST
     if (signalsWithBacktest.length > 0 && signalsWithoutBacktest.length > 0) {
       const backtestOnlyMissing = confirm(
-        `📊 Current Status:\n\n✅ ${signalsWithBacktest.length} signals already have backtest data\n❌ ${signalsWithoutBacktest.length} signals missing data\n\n────────────────────────────\n\nClick OK → Backtest ${signalsWithoutBacktest.length} missing signals only (~${signalsWithoutBacktest.length} sec)\nClick Cancel → Re-run all ${batch.signals.length} signals (~${batch.signals.length} sec)`
+        `📊 Current Status:\n\n✅ ${signalsWithBacktest.length} signals already have backtest data\n❌ ${signalsWithoutBacktest.length} signals missing data\n\n────────────────────────────\n\nClick OK → Backtest ${signalsWithoutBacktest.length} missing signals only (~${signalsWithoutBacktest.length} sec)\nClick Cancel → Choose different options`
       );
       
       if (backtestOnlyMissing) {
-        // Backtest only missing signals
+        // Backtest only missing signals - SKIP AI TOP 5 LOGIC
         setBacktestingBatchId(batch.id);
         setBacktestProgress({ current: 0, total: signalsWithoutBacktest.length });
         
@@ -244,12 +244,13 @@ export default function App() {
           setBacktestingBatchId(null);
           setBacktestProgress(null);
         }
-        return;
+        return; // Exit early - don't continue to AI logic
       }
+      // User clicked Cancel - continue to AI Top 5 choice below
     }
     
-    // Filter for AI-ranked signals (Top 5)
-    const rankedSignals = batch.signals
+    // PRIORITY 2: Filter for AI-ranked signals (Top 5) - EXCLUDE ALREADY BACKTESTED
+    const rankedSignalsAll = batch.signals
       .map((s: any) => ({
         ...s,
         avgScore: calculateAverageScore(s.chatGptRank, s.perplexityRank, s.deepSeekRank)
@@ -258,36 +259,39 @@ export default function App() {
       .sort((a: any, b: any) => (a.avgScore || 999) - (b.avgScore || 999))
       .slice(0, 5); // Top 5 only
     
+    // IMPORTANT: Filter out signals that already have backtest data
+    const rankedSignalsWithoutData = rankedSignalsAll.filter((s: any) => !s.backtest);
+    
     // Decide which signals to backtest
     let signalsToBacktest;
-    let backtestMode: 'top5' | 'all';
+    let backtestMode: 'top5' | 'all' | 'missing';
     
-    if (backtestAllOverride || rankedSignals.length === 0) {
-      // Backtest all signals
-      signalsToBacktest = batch.signals;
-      backtestMode = 'all';
-    } else {
-      // Let user choose
+    if (rankedSignalsWithoutData.length > 0) {
+      // Offer AI Top 5 (excluding already backtested ones)
       const choice = confirm(
-        `🤖 AI Top 5 Detected:\n\n${rankedSignals.map((s: any, i: number) => `${i+1}. ${s.symbol}`).join('\n')}\n\n────────────────────────────\n\nClick OK → Backtest Top 5 only (⭐ ~5 sec)\nClick Cancel → Backtest all ${batch.signals.length} signals (~${batch.signals.length} sec)`
+        `🤖 AI Top 5 Detected (without backtest data):\n\n${rankedSignalsWithoutData.map((s: any, i: number) => `${i+1}. ${s.symbol}`).join('\n')}\n\n────────────────────────────\n\nClick OK → Backtest these ${rankedSignalsWithoutData.length} AI picks only (~${rankedSignalsWithoutData.length} sec)\nClick Cancel → Backtest all missing (${signalsWithoutBacktest.length} signals, ~${signalsWithoutBacktest.length} sec)`
       );
       
       if (choice) {
-        signalsToBacktest = rankedSignals;
+        signalsToBacktest = rankedSignalsWithoutData;
         backtestMode = 'top5';
       } else {
-        signalsToBacktest = batch.signals;
-        backtestMode = 'all';
+        signalsToBacktest = signalsWithoutBacktest;
+        backtestMode = 'missing';
       }
-    }
-    
-    // Check if backtest already exists for selected signals
-    const hasBacktest = signalsToBacktest.some((s: any) => s.backtest);
-    if (hasBacktest) {
-      const rerun = confirm(
-        `Backtest data already exists for some ${backtestMode === 'top5' ? 'AI Top 5' : ''} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
+    } else if (signalsWithoutBacktest.length > 0) {
+      // No AI rankings but have missing data - backtest all missing
+      signalsToBacktest = signalsWithoutBacktest;
+      backtestMode = 'missing';
+    } else {
+      // All signals already have data - offer re-run
+      const rerunAll = confirm(
+        `All ${batch.signals.length} signals already have backtest data.\n\nDo you want to re-run all of them?\n\n(Results are deterministic and won't change)`
       );
-      if (!rerun) return;
+      if (!rerunAll) return;
+      
+      signalsToBacktest = batch.signals;
+      backtestMode = 'all';
     }
 
     setBacktestingBatchId(batch.id);
@@ -314,6 +318,8 @@ export default function App() {
       
       let message = backtestMode === 'top5'
         ? `✅ Backtest completed for AI Top ${totalCount} stocks! ⭐\n\n`
+        : backtestMode === 'missing'
+        ? `✅ Backtest completed for ${totalCount} missing signals!\n\n`
         : `✅ Backtest completed for ${totalCount} signals!\n\n`;
       
       if (dhanCount > 0) {
