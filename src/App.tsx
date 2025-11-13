@@ -201,6 +201,53 @@ export default function App() {
       return;
     }
     
+    // First, check if there are signals without backtest data
+    const signalsWithoutBacktest = batch.signals.filter((s: any) => !s.backtest);
+    const signalsWithBacktest = batch.signals.filter((s: any) => s.backtest);
+    
+    // If some signals already have backtest data, offer to backtest only missing ones
+    if (signalsWithBacktest.length > 0 && signalsWithoutBacktest.length > 0) {
+      const backtestOnlyMissing = confirm(
+        `📊 Current Status:\n\n✅ ${signalsWithBacktest.length} signals already have backtest data\n❌ ${signalsWithoutBacktest.length} signals missing data\n\n────────────────────────────\n\nClick OK → Backtest ${signalsWithoutBacktest.length} missing signals only (~${signalsWithoutBacktest.length} sec)\nClick Cancel → Re-run all ${batch.signals.length} signals (~${batch.signals.length} sec)`
+      );
+      
+      if (backtestOnlyMissing) {
+        // Backtest only missing signals
+        setBacktestingBatchId(batch.id);
+        setBacktestProgress({ current: 0, total: signalsWithoutBacktest.length });
+        
+        console.log(`🎯 Backtesting ${signalsWithoutBacktest.length} signals without data`);
+        console.log(`⏱️ Estimated time: ~${signalsWithoutBacktest.length} seconds`);
+        
+        try {
+          const results = await backtestBatch(
+            signalsWithoutBacktest,
+            (current, total) => setBacktestProgress({ current, total })
+          );
+          
+          await loadHistory();
+          
+          const dhanCount = results.filter(r => r.backtest?.dataSource === 'dhan').length;
+          const yfinanceCount = results.filter(r => r.backtest?.dataSource === 'yfinance').length;
+          const noDataCount = results.filter(r => r.backtest?.noData).length;
+          
+          let message = `✅ Backtest completed for ${signalsWithoutBacktest.length} missing signals!\n\n`;
+          if (dhanCount > 0) message += `🟢 Dhan API: ${dhanCount} stocks\n`;
+          if (yfinanceCount > 0) message += `🟡 Yahoo Finance: ${yfinanceCount} stocks\n`;
+          if (noDataCount > 0) message += `⚫ No data: ${noDataCount} stocks\n`;
+          
+          alert(message);
+        } catch (err) {
+          console.error("Backtest failed:", err);
+          alert(`❌ Backtest failed: ${err}`);
+        } finally {
+          setBacktestingBatchId(null);
+          setBacktestProgress(null);
+        }
+        return;
+      }
+    }
+    
     // Filter for AI-ranked signals (Top 5)
     const rankedSignals = batch.signals
       .map((s: any) => ({
@@ -234,11 +281,11 @@ export default function App() {
       }
     }
     
-    // Check if backtest already exists
+    // Check if backtest already exists for selected signals
     const hasBacktest = signalsToBacktest.some((s: any) => s.backtest);
     if (hasBacktest) {
       const rerun = confirm(
-        `Backtest data already exists for ${backtestMode === 'top5' ? 'AI Top 5' : 'these'} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
+        `Backtest data already exists for some ${backtestMode === 'top5' ? 'AI Top 5' : ''} signals.\n\nNote: Results are deterministic and won't change.\n\nDo you want to re-run anyway?`
       );
       if (!rerun) return;
     }
@@ -848,6 +895,10 @@ export default function App() {
                             const timeCheck = canRunBacktest(batch.date);
                             const isDisabled = !timeCheck.allowed || backtestingBatchId === batch.id;
                             
+                            // Count signals without backtest data
+                            const signalsWithoutData = batch.signals.filter((s: any) => !s.backtest).length;
+                            const signalsWithData = batch.signals.filter((s: any) => s.backtest).length;
+                            
                             // Count AI-ranked stocks (top 5)
                             const aiRankedSignals = batch.signals.filter((s: any) => {
                               const avgScore = calculateAverageScore(s.chatGptRank, s.perplexityRank, s.deepSeekRank);
@@ -895,7 +946,7 @@ export default function App() {
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
-                                    ✓ Backtested
+                                    ✓ Backtested {signalsWithoutData > 0 && `(${signalsWithoutData} missing)`}
                                   </>
                                 ) : (
                                   <>
