@@ -885,11 +885,6 @@ export default function App() {
                               <th className="text-right px-2 py-1">Stop Loss ₹</th>
                               <th className="text-center px-2 py-1">R:R</th>
                               <th className="text-right px-2 py-1">Score</th>
-                              {/* AI Rankings */}
-                              <th className="text-center px-2 py-1 text-xs text-blue-400">GPT</th>
-                              <th className="text-center px-2 py-1 text-xs text-purple-400">Perp</th>
-                              <th className="text-center px-2 py-1 text-xs text-green-400">Deep</th>
-                              <th className="text-center px-2 py-1 text-xs text-yellow-400">Final</th>
                               {/* Technical Indicators - Toggleable */}
                               {showIndicators && (
                                 <>
@@ -912,6 +907,11 @@ export default function App() {
                                   <th className="text-center px-2 py-1">SL</th>
                                 </>
                               )}
+                              {/* AI Rankings - Moved to extreme right */}
+                              <th className="text-center px-2 py-1 text-xs text-blue-400">GPT</th>
+                              <th className="text-center px-2 py-1 text-xs text-purple-400">Perp</th>
+                              <th className="text-center px-2 py-1 text-xs text-green-400">Deep</th>
+                              <th className="text-center px-2 py-1 text-xs text-yellow-400">Final</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -950,61 +950,6 @@ export default function App() {
                                 <td className="px-2 py-1 text-right font-mono text-red-400">{s.stopLoss?.toFixed(2) ?? '-'}</td>
                                 <td className="px-2 py-1 text-center text-xs text-slate-400">{s.riskReward ?? '-'}</td>
                                   <td className="px-2 py-1 text-right text-slate-400 font-semibold">{s.score?.toFixed(2) ?? '-'}</td>
-                                  {/* AI Rankings - Editable */}
-                                  <td className="p-1 text-center">
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      max="5"
-                                      value={getRankingValue(s, 'chatGpt') || ''}
-                                      onChange={(e) => updateAIRank(s.id, 'chatGpt', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className={`w-10 bg-slate-800 text-blue-300 text-center rounded px-1 py-0.5 text-xs border ${
-                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.chatGpt !== undefined
-                                          ? 'border-blue-500 ring-1 ring-blue-500/50'
-                                          : 'border-slate-700'
-                                      } focus:border-blue-500 focus:outline-none`}
-                                      placeholder="-"
-                                    />
-                                  </td>
-                                  <td className="p-1 text-center">
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      max="5"
-                                      value={getRankingValue(s, 'perplexity') || ''}
-                                      onChange={(e) => updateAIRank(s.id, 'perplexity', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className={`w-10 bg-slate-800 text-purple-300 text-center rounded px-1 py-0.5 text-xs border ${
-                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.perplexity !== undefined
-                                          ? 'border-purple-500 ring-1 ring-purple-500/50'
-                                          : 'border-slate-700'
-                                      } focus:border-purple-500 focus:outline-none`}
-                                      placeholder="-"
-                                    />
-                                  </td>
-                                  <td className="p-1 text-center">
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      max="5"
-                                      value={getRankingValue(s, 'deepSeek') || ''}
-                                      onChange={(e) => updateAIRank(s.id, 'deepSeek', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className={`w-10 bg-slate-800 text-green-300 text-center rounded px-1 py-0.5 text-xs border ${
-                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.deepSeek !== undefined
-                                          ? 'border-green-500 ring-1 ring-green-500/50'
-                                          : 'border-slate-700'
-                                      } focus:border-green-500 focus:outline-none`}
-                                      placeholder="-"
-                                    />
-                                  </td>
-                                  <td className="px-2 py-1 text-center">
-                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                      s.finalRank === 1 ? 'bg-yellow-900/50 text-yellow-300 border border-yellow-500' :
-                                      s.finalRank && s.finalRank <= 5 ? 'bg-yellow-900/20 text-yellow-400' :
-                                      'text-slate-600'
-                                    }`}>
-                                      {s.finalRank || '-'}
-                                    </span>
-                                  </td>
                                   {/* Technical Indicators - Toggleable */}
                                   {showIndicators && (
                                     <>
@@ -1082,6 +1027,61 @@ export default function App() {
                                       </td>
                                     </>
                                   )}
+                                  {/* AI Rankings - Moved to extreme right */}
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={getRankingValue(s, 'chatGpt') || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'chatGpt', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className={`w-10 bg-slate-800 text-blue-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.chatGpt !== undefined
+                                          ? 'border-blue-500 ring-1 ring-blue-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-blue-500 focus:outline-none`}
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={getRankingValue(s, 'perplexity') || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'perplexity', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className={`w-10 bg-slate-800 text-purple-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.perplexity !== undefined
+                                          ? 'border-purple-500 ring-1 ring-purple-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-purple-500 focus:outline-none`}
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="p-1 text-center">
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="5"
+                                      value={getRankingValue(s, 'deepSeek') || ''}
+                                      onChange={(e) => updateAIRank(s.id, 'deepSeek', e.target.value ? parseInt(e.target.value) : undefined)}
+                                      className={`w-10 bg-slate-800 text-green-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.deepSeek !== undefined
+                                          ? 'border-green-500 ring-1 ring-green-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-green-500 focus:outline-none`}
+                                      placeholder="-"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-1 text-center">
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                      s.finalRank === 1 ? 'bg-yellow-900/50 text-yellow-300 border border-yellow-500' :
+                                      s.finalRank && s.finalRank <= 5 ? 'bg-yellow-900/20 text-yellow-400' :
+                                      'text-slate-600'
+                                    }`}>
+                                      {s.finalRank || '-'}
+                                    </span>
+                                  </td>
                               </tr>
                               );
                             })}
