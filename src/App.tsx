@@ -21,6 +21,7 @@ export default function App() {
   const [backtestingBatchId, setBacktestingBatchId] = useState<string | null>(null);
   const [backtestProgress, setBacktestProgress] = useState<{current: number, total: number} | null>(null);
   const [expandedInsightsBatchId, setExpandedInsightsBatchId] = useState<string | null>(null);
+  const [pendingRankings, setPendingRankings] = useState<Map<string, {chatGpt?: number, perplexity?: number, deepSeek?: number}>>(new Map());
   const inputRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
@@ -97,21 +98,57 @@ export default function App() {
     return Math.round(avgRank * 10) / 10; // Round to 1 decimal
   };
 
-  // Update AI ranking for a signal
-  const updateAIRank = async (signalId: string, aiSource: 'chatGpt' | 'perplexity' | 'deepSeek', rank?: number) => {
-    const signal = await db.signals.get(signalId);
-    if (!signal) return;
+  // Update AI ranking locally (doesn't save to DB yet)
+  const updateAIRank = (signalId: string, aiSource: 'chatGpt' | 'perplexity' | 'deepSeek', rank?: number) => {
+    setPendingRankings(prev => {
+      const newMap = new Map(prev);
+      const current = newMap.get(signalId) || {};
+      
+      // Update the specific AI rank
+      if (aiSource === 'chatGpt') current.chatGpt = rank;
+      else if (aiSource === 'perplexity') current.perplexity = rank;
+      else if (aiSource === 'deepSeek') current.deepSeek = rank;
+      
+      newMap.set(signalId, current);
+      return newMap;
+    });
+  };
+
+  // Save all pending rankings to database
+  const saveRankings = async () => {
+    if (pendingRankings.size === 0) return;
     
-    // Update the specific AI rank
-    if (aiSource === 'chatGpt') signal.chatGptRank = rank;
-    else if (aiSource === 'perplexity') signal.perplexityRank = rank;
-    else if (aiSource === 'deepSeek') signal.deepSeekRank = rank;
+    const updates = [];
+    for (const [signalId, rankings] of pendingRankings.entries()) {
+      const signal = await db.signals.get(signalId);
+      if (!signal) continue;
+      
+      // Apply pending changes
+      if (rankings.chatGpt !== undefined) signal.chatGptRank = rankings.chatGpt;
+      if (rankings.perplexity !== undefined) signal.perplexityRank = rankings.perplexity;
+      if (rankings.deepSeek !== undefined) signal.deepSeekRank = rankings.deepSeek;
+      
+      // Recalculate final rank
+      signal.finalRank = calculateFinalRank(signal.chatGptRank, signal.perplexityRank, signal.deepSeekRank);
+      
+      updates.push(signal);
+    }
     
-    // Recalculate final rank
-    signal.finalRank = calculateFinalRank(signal.chatGptRank, signal.perplexityRank, signal.deepSeekRank);
-    
-    await db.signals.put(signal);
-    loadHistory(); // Refresh to show updated rankings
+    await db.signals.bulkPut(updates);
+    setPendingRankings(new Map()); // Clear pending changes
+    loadHistory(); // Refresh to show saved rankings
+  };
+
+  // Get the current value for a ranking (pending or saved)
+  const getRankingValue = (signal: any, aiSource: 'chatGpt' | 'perplexity' | 'deepSeek'): number | undefined => {
+    const pending = pendingRankings.get(signal.id);
+    if (pending && pending[aiSource] !== undefined) {
+      return pending[aiSource];
+    }
+    // Return saved value
+    if (aiSource === 'chatGpt') return signal.chatGptRank;
+    if (aiSource === 'perplexity') return signal.perplexityRank;
+    if (aiSource === 'deepSeek') return signal.deepSeekRank;
   };
 
   // Check if backtest can run (market must be closed)
@@ -646,6 +683,20 @@ export default function App() {
                             </svg>
                             Delete
                         </button>
+                        
+                        {/* Save Rankings Button - Only show when there are pending changes */}
+                        {pendingRankings.size > 0 && (
+                          <button
+                            onClick={saveRankings}
+                            className="bg-amber-600/20 border border-amber-600/50 text-amber-400 hover:bg-amber-600/30 px-3 py-2 rounded flex items-center gap-2 text-sm transition-colors font-medium animate-pulse"
+                            title={`Save ${pendingRankings.size} unsaved ranking(s)`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                            </svg>
+                            Save ({pendingRankings.size})
+                          </button>
+                        )}
                         </div>
                         
                         {/* Statistics - Show if backtest data exists */}
@@ -765,9 +816,13 @@ export default function App() {
                                       type="number"
                                       min="1"
                                       max="5"
-                                      value={s.chatGptRank || ''}
+                                      value={getRankingValue(s, 'chatGpt') || ''}
                                       onChange={(e) => updateAIRank(s.id, 'chatGpt', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className="w-10 bg-slate-800 text-blue-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-blue-500 focus:outline-none"
+                                      className={`w-10 bg-slate-800 text-blue-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.chatGpt !== undefined
+                                          ? 'border-blue-500 ring-1 ring-blue-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-blue-500 focus:outline-none`}
                                       placeholder="-"
                                     />
                                   </td>
@@ -776,9 +831,13 @@ export default function App() {
                                       type="number"
                                       min="1"
                                       max="5"
-                                      value={s.perplexityRank || ''}
+                                      value={getRankingValue(s, 'perplexity') || ''}
                                       onChange={(e) => updateAIRank(s.id, 'perplexity', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className="w-10 bg-slate-800 text-purple-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-purple-500 focus:outline-none"
+                                      className={`w-10 bg-slate-800 text-purple-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.perplexity !== undefined
+                                          ? 'border-purple-500 ring-1 ring-purple-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-purple-500 focus:outline-none`}
                                       placeholder="-"
                                     />
                                   </td>
@@ -787,9 +846,13 @@ export default function App() {
                                       type="number"
                                       min="1"
                                       max="5"
-                                      value={s.deepSeekRank || ''}
+                                      value={getRankingValue(s, 'deepSeek') || ''}
                                       onChange={(e) => updateAIRank(s.id, 'deepSeek', e.target.value ? parseInt(e.target.value) : undefined)}
-                                      className="w-10 bg-slate-800 text-green-300 text-center rounded px-1 py-0.5 text-xs border border-slate-700 focus:border-green-500 focus:outline-none"
+                                      className={`w-10 bg-slate-800 text-green-300 text-center rounded px-1 py-0.5 text-xs border ${
+                                        pendingRankings.has(s.id) && pendingRankings.get(s.id)?.deepSeek !== undefined
+                                          ? 'border-green-500 ring-1 ring-green-500/50'
+                                          : 'border-slate-700'
+                                      } focus:border-green-500 focus:outline-none`}
                                       placeholder="-"
                                     />
                                   </td>
