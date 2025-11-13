@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { dhanApi } from "../services/dhanApi";
+import { getSheetsWebhookUrl, setSheetsWebhookUrl, testSheetsConnection } from "../utils/googleSheetsSync";
 
 interface DhanCredentials {
   clientId: string;
@@ -54,8 +55,21 @@ export default function Settings({
   const [showToken, setShowToken] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Google Sheets sync state
+  const [sheetsWebhook, setSheetsWebhook] = useState('');
+  const [sheetsTestSuccess, setSheetsTestSuccess] = useState(false);
+  const [sheetsTestingConnection, setSheetsTestingConnection] = useState(false);
 
-  // Load credentials from localStorage on mount
+  // Load credentials and webhook from localStorage on mount
+  useEffect(() => {
+    const savedWebhook = getSheetsWebhookUrl();
+    if (savedWebhook) {
+      setSheetsWebhook(savedWebhook);
+    }
+  }, []);
+  
+  // Load Dhan credentials from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem('dhan_credentials');
     if (saved) {
@@ -182,6 +196,43 @@ export default function Settings({
     } finally {
       setIsSyncing(false);
     }
+  };
+  
+  // Google Sheets webhook test
+  const testSheetsWebhook = async () => {
+    if (!sheetsWebhook) {
+      alert('❌ Please enter your Google Sheets webhook URL');
+      return;
+    }
+    
+    setSheetsTestingConnection(true);
+    setSheetsTestSuccess(false);
+    
+    try {
+      // Temporarily save to test
+      setSheetsWebhookUrl(sheetsWebhook);
+      
+      const isValid = await testSheetsConnection();
+      
+      if (isValid) {
+        setSheetsTestSuccess(true);
+        alert('✅ Google Sheets connection successful!\n\nYour data will now auto-sync to Google Sheets.');
+      }
+    } catch (err) {
+      alert(`❌ Connection failed!\n\n${err}\n\nPlease check:\n1. Webhook URL is correct\n2. Apps Script is deployed\n3. Access is set to "Anyone"`);
+    } finally {
+      setSheetsTestingConnection(false);
+    }
+  };
+  
+  const saveSheetsWebhook = () => {
+    if (!sheetsTestSuccess) {
+      alert('❌ Please test the connection first!');
+      return;
+    }
+    
+    setSheetsWebhookUrl(sheetsWebhook);
+    alert('✅ Google Sheets sync is now active!\n\nAll changes will automatically sync to your Google Sheet.');
   };
 
   if (!isOpen) return null;
@@ -344,6 +395,76 @@ export default function Settings({
                   <li><code className="bg-blue-900/50 px-1 rounded">python server.py</code></li>
                 </ol>
                 <p className="mt-2 text-xs italic">See <code>BACKEND_SETUP.md</code> for detailed instructions.</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Google Sheets Sync Section */}
+          <div className="border-t border-slate-800 p-6">
+            <h3 className="text-lg font-semibold text-slate-100 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Google Sheets Sync (Cloud Backup)
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Webhook URL
+                </label>
+                <input
+                  type="text"
+                  value={sheetsWebhook}
+                  onChange={(e) => {
+                    setSheetsWebhook(e.target.value);
+                    setSheetsTestSuccess(false);
+                  }}
+                  placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
+                  className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-green-500"
+                />
+              </div>
+              
+              <div className="flex gap-2">
+                <button
+                  onClick={testSheetsWebhook}
+                  disabled={sheetsTestingConnection}
+                  className="bg-green-600/20 border border-green-600/50 text-green-400 hover:bg-green-600/30 px-4 py-2 rounded transition-colors disabled:opacity-50 text-sm"
+                >
+                  {sheetsTestingConnection ? 'Testing...' : 'Test Connection'}
+                </button>
+                
+                <button
+                  onClick={saveSheetsWebhook}
+                  disabled={!sheetsTestSuccess}
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition-colors disabled:opacity-50 disabled:bg-slate-700 disabled:cursor-not-allowed text-sm"
+                >
+                  Enable Auto-Sync
+                </button>
+                
+                {sheetsTestSuccess && (
+                  <div className="flex items-center gap-2 text-green-400 text-sm">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Connected!
+                  </div>
+                )}
+              </div>
+              
+              <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4 text-sm">
+                <p className="font-medium text-green-300 mb-2">📚 Setup Instructions:</p>
+                <ol className="list-decimal list-inside space-y-1.5 text-green-200/70 text-xs">
+                  <li>Create a new Google Sheet</li>
+                  <li>Go to Extensions → Apps Script</li>
+                  <li>Copy the script from <code className="bg-green-900/50 px-1 rounded">GOOGLE_SHEETS_SYNC.md</code></li>
+                  <li>Deploy as Web App (Anyone access)</li>
+                  <li>Copy the webhook URL and paste above</li>
+                  <li>Test connection, then enable auto-sync</li>
+                </ol>
+                <p className="mt-3 text-xs text-green-300 font-medium">
+                  ✅ Once enabled, all your signals, AI rankings, and backtest results will auto-sync to Google Sheets!
+                </p>
               </div>
             </div>
           </div>

@@ -11,6 +11,8 @@ import { backtestBatch } from "./backtest";
 import { enrichSignalRow, BaseSignalRow, IndicatorContext } from "./signalMetrics";
 import { generateMockCandles, generateNiftyCandles } from "./mockCandleData";
 import sectorMap from "./utils/sectorMap";
+import { downloadBackup, uploadBackup } from "./utils/dbBackup";
+import { autoSyncToSheets } from "./utils/googleSheetsSync";
 
 type Raw = Record<string, string>;
 
@@ -29,8 +31,36 @@ export default function App() {
   const [pendingRankings, setPendingRankings] = useState<Map<string, {chatGpt?: number, perplexity?: number, deepSeek?: number}>>(new Map());
   const [showIndicators, setShowIndicators] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const jsonImportRef = useRef<HTMLInputElement>(null);
 
   const today = useMemo(() => new Date().toISOString().slice(0,10), []);
+  
+  // JSON Backup handlers
+  const handleExportJSON = async () => {
+    try {
+      await downloadBackup();
+      alert('✅ Backup downloaded successfully!\n\nFile: intraq_backup_[date].json\n\nKeep this file safe - it contains all your signals, AI rankings, and backtest results.');
+    } catch (err) {
+      alert(`❌ Export failed: ${err}`);
+    }
+  };
+  
+  const handleImportJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      await uploadBackup(file);
+      await loadHistory(); // Refresh display
+    } catch (err) {
+      alert(`❌ Import failed: ${err}`);
+    }
+    
+    // Reset input
+    if (jsonImportRef.current) {
+      jsonImportRef.current.value = '';
+    }
+  };
 
   const loadHistory = async () => {
     // Preserve current expanded state
@@ -142,6 +172,10 @@ export default function App() {
     
     await db.signals.bulkPut(updates);
     setPendingRankings(new Map()); // Clear pending changes
+    
+    // Auto-sync to Google Sheets
+    await autoSyncToSheets(updates);
+    
     loadHistory(); // Refresh to show saved rankings
   };
 
@@ -310,6 +344,9 @@ export default function App() {
       
       await loadHistory(); // Reload to get updated data
       
+      // Auto-sync backtest results to Google Sheets
+      await autoSyncToSheets(results);
+      
       // Check data sources
       const dhanCount = results.filter(r => r.backtest?.dataSource === 'dhan').length;
       const yfinanceCount = results.filter(r => r.backtest?.dataSource === 'yfinance').length;
@@ -345,7 +382,17 @@ export default function App() {
   };
 
   const downloadCSV = (batch: any) => {
-    const headers = ['Symbol', 'Side', 'Entry', 'Target', 'Stop Loss', 'R:R', 'Score', 'Why'];
+    // Enhanced CSV with ALL data
+    const headers = [
+      'Symbol', 'Side', 'Entry', 'Target', 'Stop Loss', 'R:R', 'Score', 'Sector',
+      // AI Rankings
+      'GPT Rank', 'Perp Rank', 'Deep Rank', 'Final Rank',
+      // Technical Indicators
+      'Gap%', 'Vol Surge%', 'ATR', 'Vol Rank', 'Near High', 'Near Low', 'Trend', 'RS 20D', 'VWAP%', 'Liquidity',
+      // Backtest Results
+      'Entry Hit', 'Entry Time', 'Target Hit', 'Target Time', 'SL Hit', 'SL Time', 'Outcome', 'Time to Target (min)', 'Time to SL (min)', 'Data Source'
+    ];
+    
     const rows = batch.signals.map((s: any) => [
       s.symbol,
       s.side,
@@ -354,7 +401,34 @@ export default function App() {
       s.stopLoss?.toFixed(2) ?? '',
       s.riskReward ?? '',
       s.score?.toFixed(2) ?? '',
-      s.details?.why ?? ''
+      s.sector ?? '',
+      // AI Rankings
+      s.chatGptRank ?? '',
+      s.perplexityRank ?? '',
+      s.deepSeekRank ?? '',
+      s.finalRank ?? '',
+      // Technical Indicators
+      s.gapPercent?.toFixed(2) ?? '',
+      s.preMarketVolumeSurge?.toFixed(0) ?? '',
+      s.atr14?.toFixed(2) ?? '',
+      s.volatilityRank?.toFixed(0) ?? '',
+      s.nearDayHigh ? 'Yes' : 'No',
+      s.nearDayLow ? 'Yes' : 'No',
+      s.trendStatus ?? '',
+      s.relativeStrength20D?.toFixed(2) ?? '',
+      s.vwapDistancePercent?.toFixed(2) ?? '',
+      s.liquidityRating ?? '',
+      // Backtest Results
+      s.backtest?.entryHit ? 'Yes' : 'No',
+      s.backtest?.entryHitTime ?? '',
+      s.backtest?.targetHit ? 'Yes' : 'No',
+      s.backtest?.targetHitTime ?? '',
+      s.backtest?.slHit ? 'Yes' : 'No',
+      s.backtest?.slHitTime ?? '',
+      s.backtest?.outcome ?? '',
+      s.backtest?.timeToTarget ?? '',
+      s.backtest?.timeToSL ?? '',
+      s.backtest?.dataSource ?? ''
     ]);
     
     const csv = [
@@ -366,9 +440,11 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `signals_${batch.date}_${batch.strategy.replace(/\s+/g, '_')}.csv`;
+    a.download = `signals_complete_${batch.date}_${batch.strategy.replace(/\s+/g, '_')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    
+    console.log(`✅ Downloaded complete CSV with ${rows.length} signals and all data`);
   };
 
   const parseCsv = (file: File) => {
@@ -560,6 +636,10 @@ export default function App() {
     
     await db.signals.bulkPut(batch);
     console.log(`✅ Saved ${batch.length} signals with technical indicators`);
+    
+    // Auto-sync to Google Sheets
+    await autoSyncToSheets(batch);
+    
     alert(`✅ Saved ${batch.length} signals for ${today}\n\nTechnical indicators calculated for all stocks.\n\nClick "View History" to see results.`);
   };
 
@@ -582,10 +662,36 @@ export default function App() {
             >
               {viewMode === "generate" ? "📋 View History" : "⬅ Back to Generate"}
             </button>
+            {/* Backup Buttons */}
+            <button
+              onClick={handleExportJSON}
+              className="bg-slate-800 hover:bg-slate-700 p-2 rounded text-slate-300 hover:text-slate-100 transition-colors"
+              title="Export all data to JSON (offline backup)"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </button>
+            <button
+              onClick={() => jsonImportRef.current?.click()}
+              className="bg-slate-800 hover:bg-slate-700 p-2 rounded text-slate-300 hover:text-slate-100 transition-colors"
+              title="Import data from JSON backup"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L9 8m4-4v12" />
+              </svg>
+            </button>
+            <input
+              ref={jsonImportRef}
+              type="file"
+              accept=".json"
+              onChange={handleImportJSON}
+              className="hidden"
+            />
             <button
               onClick={() => setIsSettingsOpen(true)}
               className="bg-slate-800 hover:bg-slate-700 p-2 rounded text-slate-300 hover:text-slate-100 transition-colors"
-              title="Settings"
+              title="Settings (API & Google Sheets)"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
