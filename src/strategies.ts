@@ -1,3 +1,5 @@
+import { calculateMomentumScore } from './momentumScore';
+
 export type Row = {
   symbol: string;
   prev_close: number;
@@ -20,17 +22,19 @@ export type Signal = {
   riskReward?: string;
 };
 
-const near52High = (r: Row) =>
-  r.nm_52w_h ? (r.iep / r.nm_52w_h - 1) * 100 : -50; // -50% = assume far from 52W high if missing
-
 export function momentumGapLong(rows: Row[]): Signal[] {
   return rows
     .filter(r => r.iep > 0 && r.prev_close > 0)
     .map(r => {
       const gapPct = ((r.iep - r.prev_close)/r.prev_close)*100;
-      const near = near52High(r);
-      const liq = Math.log1p(r.value_cr ?? 0);
-      const score = (gapPct*0.6) + ((-near)*0.2) + (liq*0.8);
+      
+      // Use new normalized scoring (0-10 scale)
+      const score = calculateMomentumScore({
+        gapPct,
+        iep: r.iep,
+        nm52wHigh: r.nm_52w_h,
+        avgTurnoverCr: r.value_cr,
+      });
       
       // Intraday levels for LONG
       const entry = r.iep;
@@ -40,11 +44,16 @@ export function momentumGapLong(rows: Row[]): Signal[] {
       const stopLoss = entry * (1 - stopPct/100);
       const rr = (targetPct / stopPct).toFixed(1);
       
+      // Calculate distance from 52W high for display
+      const distFrom52WH = r.nm_52w_h 
+        ? ((r.iep / r.nm_52w_h - 1) * 100).toFixed(2)
+        : 'N/A';
+      
       return { 
         symbol: r.symbol, 
         side: "LONG" as const, 
         score, 
-        why: `Gap ${gapPct.toFixed(2)}%, ${near.toFixed(2)}% from 52W-H`,
+        why: `Gap ${gapPct.toFixed(2)}%, ${distFrom52WH}% from 52W-H, Score: ${score.toFixed(2)}/10`,
         entry: +entry.toFixed(2),
         target: +target.toFixed(2),
         stopLoss: +stopLoss.toFixed(2),
