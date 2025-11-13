@@ -207,6 +207,7 @@ export function generateTomorrowsPicks(
     "Trend = Strong/Weak Uptrend",
     "NearHigh preferred",
     "VWAP% >= 0",
+    "No SL Hit Today", // Exclude stocks that hit stop loss
   ];
 
   const candidates = withMQ.filter((r) => {
@@ -216,6 +217,8 @@ export function generateTomorrowsPicks(
     if (r.score < minScore) return false;
     if (r.trend !== "Strong Uptrend" && r.trend !== "Weak Uptrend") return false;
     if (r.vwapPct < 0) return false; // trading above VWAP
+    // CRITICAL: Exclude stocks that hit SL today - they're damaged goods!
+    if (r.hitStopLoss) return false;
     // Add extra filter here if you ever use "LOW/MEDIUM/HIGH" liquidity
     return true;
   });
@@ -251,8 +254,14 @@ export function generateTomorrowsPicks(
   });
 
   // 5) Avoid list – mainly SL hits & weak RS/trend
+  // Exclude stocks that are already in Top 5 (no duplicates!)
+  const topPickSymbols = new Set(topPicks.map(p => p.symbol));
+  
   const avoidList: AvoidItem[] = withMQ
     .filter((r) => {
+      // Don't add Top 5 picks to avoid list
+      if (topPickSymbols.has(r.symbol)) return false;
+      
       const slHit = !!r.hitStopLoss || r.hitStopLoss === true;
       const weakRs = r.rs20d < 0;
       const badTrend = r.trend === "Downtrend";
