@@ -361,6 +361,44 @@ export default function App() {
       // Generate mock candle data for this symbol
       const symbolCandles = generateMockCandles(s.symbol, s.entry, 60);
       
+      // Calculate realistic volumes from turnover (value_cr is in crores)
+      const valueCr = originalRow?.value_cr ?? 10; // Default 10 crores
+      const avgPrice = (prevClose + preOpenPrice) / 2;
+      
+      // Estimate volumes: turnover (₹) / price = volume
+      // value_cr is in crores (1 crore = 10,000,000)
+      const estimatedDailyVolume = (valueCr * 10000000) / avgPrice;
+      
+      // Pre-market typically sees 5-20% of daily volume
+      // Use final_qty if available, else estimate 10-15% of daily
+      const preMarketVolumeFactor = 0.1 + (Math.random() * 0.05); // 10-15%
+      const preOpenVolume = originalRow?.final_qty 
+        ? originalRow.final_qty * 1000 // Multiply by 1000 if final_qty is in '000s
+        : estimatedDailyVolume * preMarketVolumeFactor;
+      
+      // 30-day average is typically similar to estimated daily (with some variance)
+      const avg30dVolume = estimatedDailyVolume * (0.8 + Math.random() * 0.4); // 80-120% of estimate
+      
+      // Calculate realistic VWAP based on gap direction
+      // VWAP typically sits between prev_close and current_price
+      // For gap-up (bullish): VWAP is below current price (IEP)
+      // For gap-down: VWAP is above current price
+      const gapPercent = ((preOpenPrice - prevClose) / prevClose) * 100;
+      let vwap: number;
+      
+      if (gapPercent > 0) {
+        // Gap-up: VWAP between prev_close and entry (typically 40-70% of the way)
+        const vwapPosition = 0.4 + Math.random() * 0.3; // 40-70%
+        vwap = prevClose + (preOpenPrice - prevClose) * vwapPosition;
+      } else if (gapPercent < 0) {
+        // Gap-down: VWAP between entry and prev_close (typically 30-60% of the way)
+        const vwapPosition = 0.3 + Math.random() * 0.3; // 30-60%
+        vwap = preOpenPrice + (prevClose - preOpenPrice) * vwapPosition;
+      } else {
+        // No gap: VWAP very close to current price (±0.2%)
+        vwap = s.entry * (0.998 + Math.random() * 0.004);
+      }
+      
       // Create base signal row for enrichment
       const baseSignal: BaseSignalRow = {
         symbol: s.symbol,
@@ -372,10 +410,10 @@ export default function App() {
         score: s.score,
         prevClose: prevClose,
         preOpenPrice: preOpenPrice,
-        preOpenVolume: originalRow?.final_qty ?? 100000, // Use final_qty as pre-open volume
+        preOpenVolume: preOpenVolume,
         currentPrice: s.entry,
-        avg30dVolume: 1000000, // Mock average volume
-        vwap: s.entry * (0.995 + Math.random() * 0.01), // Mock VWAP around entry
+        avg30dVolume: avg30dVolume,
+        vwap: vwap,
       };
       
       // Create indicator context
@@ -394,16 +432,16 @@ export default function App() {
       const enriched = enrichSignalRow(baseSignal, context);
       
       return {
-        id: `${today}-${strategy}-${s.symbol}`,
-        date: today,
-        symbol: s.symbol,
-        strategy,
-        side: s.side,
-        score: s.score,
-        entry: s.entry,
-        target: s.target,
-        stopLoss: s.stopLoss,
-        riskReward: s.riskReward,
+      id: `${today}-${strategy}-${s.symbol}`,
+      date: today,
+      symbol: s.symbol,
+      strategy,
+      side: s.side,
+      score: s.score,
+      entry: s.entry,
+      target: s.target,
+      stopLoss: s.stopLoss,
+      riskReward: s.riskReward,
         sector: sectorMap[s.symbol] || 'UNKNOWN',
         details: { why: s.why, csvFileName },
         // Technical indicators
