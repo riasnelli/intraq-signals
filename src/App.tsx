@@ -768,7 +768,17 @@ export default function App() {
                 {signals.map((s: any, i: number) => (
                   <tr key={s.symbol} className="border-t border-slate-800 hover:bg-slate-800">
                     <td className="p-2 text-slate-400">{i+1}</td>
-                    <td className="p-2 font-semibold text-sky-300">{s.symbol}</td>
+                    <td className="p-2 font-semibold">
+                      <a
+                        href={`https://in.tradingview.com/symbols/NSE-${s.symbol}/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sky-300 hover:text-sky-200 hover:underline transition-colors"
+                        title={`View ${s.symbol} on TradingView`}
+                      >
+                        {s.symbol}
+                      </a>
+                    </td>
                     <td className="p-2">
                       <span className={`px-2 py-1 rounded text-xs ${s.side === 'LONG' ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
                         {s.side}
@@ -999,7 +1009,7 @@ export default function App() {
                           </svg>
                           {showIndicators ? 'Hide Indicators' : 'Indicators'}
                         </button>
-                        </div>
+                      </div>
                         
                         {/* Right Side - Backtest Button */}
                         <div className="flex items-center gap-2">
@@ -1072,8 +1082,8 @@ export default function App() {
                             );
                           })()}
                         </div>
-                        </div>
-                        
+                    </div>
+
                         {/* Statistics - Show if backtest data exists */}
                         {batch.signals.some((s: any) => s.backtest) && (
                           <>
@@ -1207,8 +1217,16 @@ export default function App() {
                               return (
                                 <tr key={s.id} className={`border-t border-slate-800 hover:bg-slate-800 ${rowBgClass}`}>
                                 <td className="px-2 py-1 text-slate-400">{i+1}</td>
-                                  <td className="px-2 py-1 font-semibold text-sky-300">
-                                    {s.symbol}
+                                  <td className="px-2 py-1 font-semibold">
+                                    <a
+                                      href={`https://in.tradingview.com/symbols/NSE-${s.symbol}/`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-sky-300 hover:text-sky-200 hover:underline transition-colors"
+                                      title={`View ${s.symbol} on TradingView`}
+                                    >
+                                      {s.symbol}
+                                    </a>
                                     {isYFinance && <span className="ml-1 text-[10px] text-yellow-500" title="Data from Yahoo Finance">ⓨ</span>}
                                     {isTopRanked && <span className="ml-1 text-[10px] text-yellow-400" title="AI Top 5">⭐</span>}
                                   </td>

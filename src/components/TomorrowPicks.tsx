@@ -116,7 +116,15 @@ export default function TomorrowPicks({ signals, onClose }: TomorrowPicksProps) 
                         </div>
                         <div>
                           <div className="font-semibold text-lg text-green-100 flex items-center gap-2">
-                            {pick.symbol}
+                            <a
+                              href={`https://in.tradingview.com/symbols/NSE-${pick.symbol}/`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:text-green-300 hover:underline transition-colors"
+                              title={`View ${pick.symbol} on TradingView`}
+                            >
+                              {pick.symbol}
+                            </a>
                             {pick.row.hitTarget && (
                               <span className="text-xs bg-emerald-600/20 text-emerald-400 px-2 py-0.5 rounded">
                                 ✓ Target Hit Today
@@ -192,7 +200,15 @@ export default function TomorrowPicks({ signals, onClose }: TomorrowPicksProps) 
                     key={item.symbol}
                     className="bg-red-900/20 border border-red-700/30 rounded-lg p-3 text-sm"
                   >
-                    <span className="font-semibold text-red-100">{item.symbol}</span>
+                    <a
+                      href={`https://in.tradingview.com/symbols/NSE-${item.symbol}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-red-100 hover:text-red-300 hover:underline transition-colors"
+                      title={`View ${item.symbol} on TradingView`}
+                    >
+                      {item.symbol}
+                    </a>
                     <span className="text-slate-400"> – </span>
                     <span className="text-slate-300">
                       {item.reasons
